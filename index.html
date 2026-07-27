@@ -2,9 +2,13 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- アプリ化するためのメタタグ（PWA設定） -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="スキャン照合">
+    
     <title>QR・バーコード スキャン照合アプリ</title>
-    <!-- バーコード・QRコード読み取り用ライブラリ -->
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <style>
         body {
@@ -13,11 +17,60 @@
             color: #333;
             margin: 0;
             padding: 16px;
+            /* スワイプで戻るなどのブラウザ特有の動作を抑制 */
+            overscroll-behavior-y: none; 
         }
         h1 {
             font-size: 1.2rem;
             text-align: center;
             margin-bottom: 16px;
+        }
+        
+        /* インストールガイド画面のスタイル */
+        #install-guide {
+            display: none;
+            background: #fff;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            max-width: 500px;
+            margin: 20px auto;
+            line-height: 1.6;
+        }
+        #install-guide h2 {
+            font-size: 1.2rem;
+            margin-top: 0;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 8px;
+        }
+        #install-guide ol {
+            padding-left: 20px;
+        }
+        #install-guide li {
+            margin-bottom: 12px;
+        }
+        .note {
+            font-size: 0.85rem;
+            color: #ef4444;
+            display: block;
+            margin-top: 4px;
+        }
+        .icon-share {
+            display: inline-block;
+            border: 1px solid #333;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        .force-run-btn {
+            background-color: #e5e7eb;
+            color: #4b5563;
+            margin-top: 24px;
+        }
+
+        /* アプリ本体のスタイル */
+        #app-container {
+            display: none;
         }
         #reader {
             width: 100%;
@@ -40,20 +93,10 @@
             background-color: #e2e8f0;
             color: #475569;
         }
-        .status-ok {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 2px solid #10b981;
-        }
-        .status-ng {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 2px solid #ef4444;
-        }
-        .status-wait {
-            background-color: #fef3c7;
-            color: #92400e;
-        }
+        .status-ok { background-color: #d1fae5; color: #065f46; border: 2px solid #10b981; }
+        .status-ng { background-color: #fee2e2; color: #991b1b; border: 2px solid #ef4444; }
+        .status-wait { background-color: #fef3c7; color: #92400e; }
+        
         .result-box {
             background: #fff;
             padding: 16px;
@@ -64,43 +107,18 @@
             margin-left: auto;
             margin-right: auto;
         }
-        h3 {
-            margin-top: 0;
-            font-size: 1rem;
-            color: #2563eb;
-            border-bottom: 2px solid #bfdbfe;
-            padding-bottom: 4px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-        th, td {
-            padding: 8px 4px;
-            border-bottom: 1px solid #e5e7eb;
-            text-align: left;
-        }
-        th {
-            width: 35%;
-            color: #6b7280;
-        }
-        td {
-            font-family: monospace;
-            font-size: 1rem;
-        }
-        .barcode-text {
-            font-family: monospace;
-            font-size: 1.2rem;
-            font-weight: bold;
-            text-align: center;
-            margin: 8px 0;
-        }
+        h3 { margin-top: 0; font-size: 1rem; color: #2563eb; border-bottom: 2px solid #bfdbfe; padding-bottom: 4px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th, td { padding: 8px 4px; border-bottom: 1px solid #e5e7eb; text-align: left; }
+        th { width: 35%; color: #6b7280; font-weight: normal; }
+        td { font-family: monospace; font-size: 1rem; font-weight: bold; }
+        .barcode-text { font-family: monospace; font-size: 1.2rem; font-weight: bold; text-align: center; margin: 8px 0; }
+        
         button {
             display: block;
             width: 100%;
             max-width: 500px;
-            margin: 0 auto;
+            margin: 0 auto 16px auto;
             padding: 14px;
             background-color: #3b82f6;
             color: white;
@@ -111,92 +129,155 @@
             cursor: pointer;
             box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3);
         }
-        button:active {
-            background-color: #2563eb;
+        button:active { background-color: #2563eb; }
+        
+        #btn-start {
+            background-color: #10b981;
+            box-shadow: 0 4px 6px rgba(16, 185, 129, 0.3);
+            font-size: 1.2rem;
+            padding: 20px;
         }
+        #btn-start:active { background-color: #059669; }
     </style>
 </head>
 <body>
 
-    <h1>QR・ITF スキャン照合</h1>
-    
-    <!-- カメラ映像表示エリア -->
-    <div id="reader"></div>
-
-    <!-- 状態メッセージ -->
-    <div id="status" class="status-box">カメラを許可してスキャンしてください</div>
-
-    <!-- QRコード解析結果 -->
-    <div id="qr-result" class="result-box" style="display: none;">
-        <h3>QRコード情報</h3>
-        <table>
-            <tr><th>ITFコード</th><td id="res-itf"></td></tr>
-            <tr><th>品番</th><td id="res-part"></td></tr>
-            <tr><th>ロット混載</th><td id="res-lot"></td></tr>
-            <tr><th>製造日時</th><td id="res-date"></td></tr>
-            <tr><th>ナンバリング</th><td id="res-num"></td></tr>
-            <tr><th>品名</th><td id="res-name"></td></tr>
-        </table>
+    <!-- ▼ ホーム画面追加ガイド（ブラウザで開いた時のみ表示） ▼ -->
+    <div id="install-guide">
+        <h2>ホーム画面への登録方法</h2>
+        <ol>
+            <li>Safariでこのページを開きます。</li>
+            <li>画面下部の「共有 <span class="icon-share">↑</span>」アイコンをタップします。<br>
+                <span class="note">※アイコンが表示されていない場合は、画面を少し上にスクロールしてください。</span>
+            </li>
+            <li>メニューから「ホーム画面に追加」をタップします。</li>
+            <li>右上の「追加」をタップします。<br>
+                <span class="note">※次回からはホーム画面に追加されたアイコンから起動してください。</span>
+            </li>
+        </ol>
+        <button class="force-run-btn" onclick="forceAppMode()">ブラウザのままテスト起動する</button>
     </div>
 
-    <!-- バーコード解析結果 -->
-    <div id="barcode-result" class="result-box" style="display: none;">
-        <h3>読み取ったバーコード (ITF)</h3>
-        <p id="res-barcode" class="barcode-text"></p>
-    </div>
+    <!-- ▼ アプリ本体（ホーム画面から起動した時のみ表示） ▼ -->
+    <div id="app-container">
+        <h1>スキャン照合</h1>
+        
+        <!-- スキャン開始ボタン -->
+        <button id="btn-start" onclick="startScanner()">カメラを起動してスキャン開始</button>
 
-    <button onclick="resetApp()">リセットしてやり直す</button>
+        <!-- カメラ映像表示エリア -->
+        <div id="reader" style="display: none;"></div>
+
+        <!-- 状態メッセージ -->
+        <div id="status" class="status-box" style="display: none;">QRコード、またはバーコードをスキャンしてください</div>
+
+        <!-- QRコード解析結果 -->
+        <div id="qr-result" class="result-box" style="display: none;">
+            <h3>QRコード情報</h3>
+            <table>
+                <tr><th>ITFコード</th><td id="res-itf"></td></tr>
+                <tr><th>品番</th><td id="res-part"></td></tr>
+                <tr><th>ロット混載</th><td id="res-lot"></td></tr>
+                <tr><th>製造ロット</th><td id="res-mfg-lot"></td></tr>
+                <tr><th>製造日時</th><td id="res-mfg-time"></td></tr>
+                <tr><th>ナンバリング</th><td id="res-num"></td></tr>
+                <tr><th>品名</th><td id="res-name"></td></tr>
+            </table>
+        </div>
+
+        <!-- バーコード解析結果 -->
+        <div id="barcode-result" class="result-box" style="display: none;">
+            <h3>読み取ったバーコード (ITF)</h3>
+            <p id="res-barcode" class="barcode-text"></p>
+        </div>
+
+        <button id="btn-reset" onclick="resetApp()" style="display: none;">リセットしてやり直す</button>
+    </div>
 
     <script>
+        // PWA（ホーム画面追加）判定ロジック
+        document.addEventListener("DOMContentLoaded", () => {
+            // iOS Safariで「ホーム画面から起動されたか」を判定
+            const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+            
+            if (isStandalone) {
+                // ホーム画面から起動：アプリ本体を表示
+                document.getElementById("install-guide").style.display = "none";
+                document.getElementById("app-container").style.display = "block";
+            } else {
+                // ブラウザから起動：インストールガイドを表示
+                document.getElementById("install-guide").style.display = "block";
+                document.getElementById("app-container").style.display = "none";
+            }
+        });
+
+        // インストールせずにテスト起動するための関数
+        function forceAppMode() {
+            document.getElementById("install-guide").style.display = "none";
+            document.getElementById("app-container").style.display = "block";
+        }
+
         let qrData_ITF = null;
         let barcodeData_ITF = null;
         let html5QrCode;
+        let isScanning = false;
 
-        // 音声フィードバック用（バイブレーション）
         function vibrate() {
-            if (navigator.vibrate) {
-                navigator.vibrate(200);
-            }
+            if (navigator.vibrate) { navigator.vibrate(200); }
         }
 
-        // QRコードの文字列を仕様に沿って分割
+        // 変更点: 製造日時の分割ロジック
         function parseQRCode(text) {
-            // 文字列が短い場合でもエラーにならないよう余白をトリム
             const safeSub = (str, start, end) => str.substring(start, end).trim();
+            const rawDateTime = safeSub(text, 24, 36); // e.g. BC6727110325
+            
+            let lot = "";
+            let timeStr = "";
+            
+            // 12桁ある場合は6桁ずつに分割して時間をフォーマット
+            if (rawDateTime.length === 12) {
+                lot = rawDateTime.substring(0, 6);
+                
+                // parseIntで先頭の0を削除（例: "03" -> 3）
+                const hh = parseInt(rawDateTime.substring(6, 8), 10);
+                const mm = parseInt(rawDateTime.substring(8, 10), 10);
+                const ss = parseInt(rawDateTime.substring(10, 12), 10);
+                timeStr = `${hh}時${mm}分${ss}秒`;
+            } else {
+                lot = rawDateTime; // 予期せぬ文字数の場合はそのまま出力
+            }
             
             return {
-                itf: safeSub(text, 0, 14),           // レジスタ1〜7 (14文字)
-                partNo: safeSub(text, 14, 22),       // レジスタ8〜11 (8文字)
-                lotMix: safeSub(text, 22, 24),       // レジスタ12 (2文字)
-                mfgDate: safeSub(text, 24, 36),      // レジスタ13〜18 (12文字)
-                numbering: safeSub(text, 36, 40),    // レジスタ19〜20 (4文字)
-                productName: safeSub(text, 40, 56)   // レジスタ21〜28 (16文字)
+                itf: safeSub(text, 0, 14),
+                partNo: safeSub(text, 14, 22),
+                lotMix: safeSub(text, 22, 24),
+                mfgLot: lot,           // 分割した製造ロット
+                mfgTime: timeStr,      // 分割した製造時間
+                numbering: safeSub(text, 36, 40),
+                productName: safeSub(text, 40, 56)
             };
         }
 
-        // 読み取り成功時の処理
         function onScanSuccess(decodedText, decodedResult) {
             const formatName = decodedResult?.result?.format?.formatName;
             let updated = false;
 
-            // QRコードの場合 (文字数やフォーマットで判定)
             if (formatName === "QR_CODE" || decodedText.length > 30) {
                 if (!qrData_ITF) {
                     const parsed = parseQRCode(decodedText);
                     qrData_ITF = parsed.itf;
                     
-                    // UI更新
                     document.getElementById("res-itf").innerText = parsed.itf;
                     document.getElementById("res-part").innerText = parsed.partNo;
                     document.getElementById("res-lot").innerText = parsed.lotMix;
-                    document.getElementById("res-date").innerText = parsed.mfgDate;
+                    document.getElementById("res-mfg-lot").innerText = parsed.mfgLot;
+                    document.getElementById("res-mfg-time").innerText = parsed.mfgTime;
                     document.getElementById("res-num").innerText = parsed.numbering;
                     document.getElementById("res-name").innerText = parsed.productName;
                     document.getElementById("qr-result").style.display = "block";
                     updated = true;
                 }
             } 
-            // ITFバーコードの場合 (ITFフォーマット、または14桁の数字)
             else if (formatName === "ITF" || /^\d{14}$/.test(decodedText)) {
                 if (!barcodeData_ITF) {
                     barcodeData_ITF = decodedText;
@@ -212,10 +293,8 @@
             }
         }
 
-        // 照合判定
         function checkMatch() {
             const statusEl = document.getElementById("status");
-            
             if (qrData_ITF && barcodeData_ITF) {
                 if (qrData_ITF === barcodeData_ITF) {
                     statusEl.innerText = "✅ 照合OK：ITFコードが一致しました！";
@@ -233,47 +312,42 @@
             }
         }
 
-        // リセット処理
         function resetApp() {
             qrData_ITF = null;
             barcodeData_ITF = null;
-            
             document.getElementById("qr-result").style.display = "none";
             document.getElementById("barcode-result").style.display = "none";
-            
             const statusEl = document.getElementById("status");
             statusEl.innerText = "QRコード、またはバーコードをスキャンしてください";
             statusEl.className = "status-box";
         }
 
-        // カメラ起動
+        // カメラ起動処理（ボタンを押した時に発火）
         function startScanner() {
-            // 最初に起動成功した最も安定している初期化に戻します
+            if(isScanning) return;
+            
+            // UIの切り替え
+            document.getElementById("btn-start").style.display = "none";
+            document.getElementById("reader").style.display = "block";
+            document.getElementById("status").style.display = "block";
+            document.getElementById("btn-reset").style.display = "block";
+
             html5QrCode = new Html5Qrcode("reader");
             
-            // 変更点: qrbox（読み取り枠）の指定をあえて削除します。
-            // 枠をなくして画面全体をスキャン対象にすることで、
-            // 横に長いITFバーコードが見切れるのを防ぎ、細かいQRも合わせやすくなります。
-            const config = { 
-                fps: 10
-            };
-
-            // 最初に起動成功した最も安全なカメラ指定（背面カメラ）
+            const config = { fps: 10 };
             const cameraConfig = { facingMode: "environment" };
 
             html5QrCode.start(cameraConfig, config, onScanSuccess)
             .then(() => {
+                isScanning = true;
                 resetApp();
             })
             .catch(err => {
-                document.getElementById("status").innerText = "カメラの起動に失敗しました。Safariの設定でカメラへのアクセスを許可してください。";
+                document.getElementById("status").innerText = "カメラの起動に失敗しました。";
                 document.getElementById("status").className = "status-box status-ng";
                 console.error(err);
             });
         }
-
-        // ページ読み込み時にカメラ起動
-        window.onload = startScanner;
     </script>
 </body>
 </html>
