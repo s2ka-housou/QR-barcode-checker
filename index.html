@@ -30,6 +30,7 @@
     }
 
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
 
     body {
       margin: 0;
@@ -218,6 +219,14 @@
       line-height: 1.45;
     }
 
+    .share-icon {
+      width: 1.05em;
+      height: 1.2em;
+      margin: 0 .08em;
+      object-fit: contain;
+      vertical-align: -.18em;
+    }
+
     .spinner {
       display: inline-block;
       width: 1em;
@@ -240,7 +249,7 @@
     <ol>
       <li>Safariでこのページを開きます。</li>
       <li>
-        「共有⇧」をタップします。
+        「共有<img class="share-icon" src="share-icon.png" alt="共有アイコン">」をタップします。
         <span class="note">※ 共有アイコンが表示されていない場合は、「…」をタップしてください。</span>
       </li>
       <li>「ホーム画面に追加」をタップします。</li>
