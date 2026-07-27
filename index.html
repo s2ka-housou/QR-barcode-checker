@@ -191,27 +191,36 @@
         async function applyCameraEnhancements() {
             const video = document.querySelector("#reader video");
             const track = video?.srcObject?.getVideoTracks?.()[0];
-            if (!track || !track.getCapabilities) return;
         
+            if (!track || !track.getCapabilities) {
+                console.log("カメラの詳細設定に対応していません");
+                return;
+            }
+
             const caps = track.getCapabilities();
-            const constraints = {};
+        
+            console.log("Camera capabilities:", caps);
         
             if (caps.zoom) {
                 const min = caps.zoom.min ?? 1;
                 const max = caps.zoom.max ?? min;
-                constraints.zoom = Math.min(max, Math.max(min, 1.8));
-            }
         
-            if (caps.torch) {
-                constraints.torch = true;
-            }
-
-            if (Object.keys(constraints).length === 0) return;
+                const zoomValue = Math.min(
+                    max,
+                    Math.max(min, 1.8)
+                );
         
-            try {
-                await track.applyConstraints(constraints);
-            } catch (e) {
-                console.warn("Camera enhancement failed:", e);
+                try {
+                    await track.applyConstraints({
+                        advanced: [
+                            { zoom: zoomValue }
+                        ]
+                    });
+        
+                    console.log("Zoom applied:", zoomValue);
+                } catch (e) {
+                    console.warn("Zoom failed:", e);
+                }
             }
         }
         
@@ -298,16 +307,7 @@
                 qrbox: boxSize,
                 aspectRatio: mode === "qr" ? 1.0 : 3.0,
                 disableFlip: true,
-                formatsToSupport: formats,
-                videoConstraints: {
-                    facingMode: { ideal: "environment" },
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 },
-                    frameRate: { ideal: 10, max: 15 }
-                },
-                experimentalFeatures: {
-                    useBarCodeDetectorIfSupported: true
-                }
+                formatsToSupport: formats
             };
         
             try {
