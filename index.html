@@ -3,283 +3,183 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QR・バーコード スキャン照合アプリ</title>
-    <!-- バーコード・QRコード読み取り用ライブラリ -->
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <title>QR・バーコード照合アプリ</title>
+    <!-- 相性の良いhtml5-qrcodeライブラリを使用 -->
+    <script src="https://unpkg.com"></script>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #f4f7f6;
-            color: #333;
-            margin: 0;
-            padding: 16px;
-        }
-        h1 {
-            font-size: 1.2rem;
-            text-align: center;
-            margin-bottom: 16px;
-        }
-        #reader {
-            width: 100%;
-            max-width: 500px;
-            margin: 0 auto 16px auto;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            background-color: #000;
-        }
-        .status-box {
-            padding: 12px;
-            border-radius: 8px;
-            text-align: center;
-            font-weight: bold;
-            margin-bottom: 16px;
-            max-width: 500px;
-            margin-left: auto;
-            margin-right: auto;
-            background-color: #e2e8f0;
-            color: #475569;
-        }
-        .status-ok {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 2px solid #10b981;
-        }
-        .status-ng {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 2px solid #ef4444;
-        }
-        .status-wait {
-            background-color: #fef3c7;
-            color: #92400e;
-        }
-        .result-box {
-            background: #fff;
-            padding: 16px;
-            border-radius: 8px;
-            margin-bottom: 16px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            max-width: 500px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        h3 {
-            margin-top: 0;
-            font-size: 1rem;
-            color: #2563eb;
-            border-bottom: 2px solid #bfdbfe;
-            padding-bottom: 4px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }
-        th, td {
-            padding: 8px 4px;
-            border-bottom: 1px solid #e5e7eb;
-            text-align: left;
-        }
-        th {
-            width: 35%;
-            color: #6b7280;
-        }
-        td {
-            font-family: monospace;
-            font-size: 1rem;
-        }
-        .barcode-text {
-            font-family: monospace;
-            font-size: 1.2rem;
-            font-weight: bold;
-            text-align: center;
-            margin: 8px 0;
-        }
-        button {
-            display: block;
-            width: 100%;
-            max-width: 500px;
-            margin: 0 auto;
-            padding: 14px;
-            background-color: #3b82f6;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
-            font-weight: bold;
-            cursor: pointer;
-            box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3);
-        }
-        button:active {
-            background-color: #2563eb;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; background: #f5f5f7; color: #333; }
+        h1 { font-size: 18px; text-align: center; margin-bottom: 16px; }
+        .card { background: white; padding: 14px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 12px; }
+        #reader { width: 100%; max-width: 360px; margin: 0 auto; border-radius: 8px; overflow: hidden; background: #000; }
+        .result-box { margin-top: 8px; padding: 10px; border-radius: 8px; background: #f0f0f2; font-size: 14px; line-height: 1.5; }
+        .label { font-weight: bold; color: #666; font-size: 11px; margin-top: 4px; }
+        .value { font-size: 15px; color: #000; font-family: monospace; font-weight: bold; margin-bottom: 4px; word-break: break-all; }
+        .status { text-align: center; font-size: 18px; font-weight: bold; padding: 12px; border-radius: 8px; margin-top: 8px; }
+        .match { background: #e2fbe8; color: #1e7e34; }
+        .mismatch { background: #fce8e6; color: #c53929; }
+        .waiting { background: #fff3cd; color: #856404; }
     </style>
 </head>
 <body>
 
-    <h1>QR・ITF スキャン照合</h1>
+    <h1>QR・バーコード照合アプリ</h1>
+
+    <!-- 1. カメラエリア -->
+    <div class="card">
+        <div id="reader"></div>
+    </div>
+
+    <!-- 2. 照合判定ステータス -->
+    <div class="card">
+        <h3>照合判定</h3>
+        <div id="judgment-status" class="status waiting">QRとバーコードを読み取ってください</div>
+    </div>
+
+    <!-- 3. QRコード読み取り結果 -->
+    <div class="card">
+        <h3>① QRコード解析結果</h3>
+        <div class="result-box">
+            <div class="label">ITFコード (レジスタ1-7: 14桁)</div>
+            <div id="qr-itf" class="value">---</div>
+            <div class="label">品番 (レジスタ8-11: 8桁)</div>
+            <div id="qr-name" class="value">---</div>
+            <div class="label">ナンバリング (レジスタ19-20: 4桁)</div>
+            <div id="qr-num" class="value">---</div>
+            <div class="label">品名 (レジスタ21-28: 16桁)</div>
+            <div id="qr-title" class="value">---</div>
+            <div class="label">生データ（全体）</div>
+            <div id="qr-raw" class="value" style="font-size:11px; color:#777; font-weight:normal;">---</div>
+        </div>
+    </div>
+
+    <!-- 4. バーコード読み取り結果 -->
+    <div class="card">
+        <h3>② バーコード (ITF) 読取結果</h3>
+        <div class="result-box">
+            <div class="label">読み取ったITFコード</div>
+            <div id="bar-itf" class="value">---</div>
+        </div>
+    </div>
+
+<script>
+let html5QrCode = null;
+let savedQrItf = null;
+let savedBarItf = null;
+let isPaused = false; // 連続読み込みを一時制御するフラグ
+
+// ページ読み込み時に自動でカメラ起動
+window.onload = startScanner;
+
+function startScanner() {
+    html5QrCode = new Html5Qrcode("reader");
     
-    <!-- カメラ映像表示エリア -->
-    <div id="reader"></div>
+    // QRコードとITFバーコードのみに絞って処理を高速化
+    const config = { 
+        fps: 10, 
+        qrbox: { width: 250, height: 250 },
+        formatsToSupport: [
+            Html5QrcodeSupportedFormats.QR_CODE,
+            Html5QrcodeSupportedFormats.ITF
+        ]
+    };
 
-    <!-- 状態メッセージ -->
-    <div id="status" class="status-box">カメラを許可してスキャンしてください</div>
+    // カメラの解像度をフルHD相当に引き上げる設定
+    const videoConstraints = {
+        facingMode: "environment",
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        advanced: [{ focusMode: "continuous" }]
+    };
 
-    <!-- QRコード解析結果 -->
-    <div id="qr-result" class="result-box" style="display: none;">
-        <h3>QRコード情報</h3>
-        <table>
-            <tr><th>ITFコード</th><td id="res-itf"></td></tr>
-            <tr><th>品番</th><td id="res-part"></td></tr>
-            <tr><th>ロット混載</th><td id="res-lot"></td></tr>
-            <tr><th>製造日時</th><td id="res-date"></td></tr>
-            <tr><th>ナンバリング</th><td id="res-num"></td></tr>
-            <tr><th>品名</th><td id="res-name"></td></tr>
-        </table>
-    </div>
+    html5QrCode.start(videoConstraints, config, onScanSuccess)
+    .then(() => {
+        resetApp();
+    })
+    .catch(err => {
+        document.getElementById("judgment-status").innerText = "カメラの起動に失敗しました。Safariの設定でカメラへのアクセスを許可してください。";
+        document.getElementById("judgment-status").className = "status mismatch";
+        console.error(err);
+    });
+}
 
-    <!-- バーコード解析結果 -->
-    <div id="barcode-result" class="result-box" style="display: none;">
-        <h3>読み取ったバーコード (ITF)</h3>
-        <p id="res-barcode" class="barcode-text"></p>
-    </div>
+// 読み取り成功時の処理
+function onScanSuccess(decodedText, decodedResult) {
+    // 判定処理中の時はスルーする（重複読み込み防止）
+    if (isPaused) return;
 
-    <button onclick="resetApp()">リセットしてやり直す</button>
+    const formatName = decodedResult.result.format.formatName;
+    
+    // 【判定】QRコードを読み取った場合
+    if (formatName === "QR_CODE") {
+        document.getElementById("qr-raw").innerText = decodedText;
 
-    <script>
-        let qrData_ITF = null;
-        let barcodeData_ITF = null;
-        let html5QrCode;
+        // ご提示のレジスタ仕様（半角1文字=インデックス1つ分）に準拠した切り出し
+        savedQrItf = decodedText.slice(0, 14).trim();       // レジスタ1-7 (14桁)
+        const pinban = decodedText.slice(14, 22).trim();     // レジスタ8-11 (8桁)
+        const numbering = decodedText.slice(36, 40).trim();  // レジスタ19-20 (4桁)
+        const hinmei = decodedText.slice(40, 56).trim();     // レジスタ21-28 (16桁)
 
-        // 音声フィードバック用（バイブレーション）
-        function vibrate() {
-            if (navigator.vibrate) {
-                navigator.vibrate(200);
-            }
+        // 画面に反映
+        document.getElementById("qr-itf").innerText = savedQrItf;
+        document.getElementById("qr-name").innerText = pinban;
+        document.getElementById("qr-num").innerText = numbering;
+        document.getElementById("qr-title").innerText = hinmei;
+
+        checkMatch();
+    } 
+    // 【判定】バーコード（ITF）を読み取った場合
+    else if (formatName === "ITF") {
+        const cleanBar = decodedText.replace(/[^0-9]/g, "");
+        if (cleanBar.length >= 13) {
+            savedBarItf = cleanBar;
+            document.getElementById("bar-itf").innerText = savedBarItf;
+            checkMatch();
         }
+    }
+}
 
-        // QRコードの文字列を仕様に沿って分割
-        function parseQRCode(text) {
-            // 文字列が短い場合でもエラーにならないよう余白をトリム
-            const safeSub = (str, start, end) => str.substring(start, end).trim();
+// 照合判定を行う関数
+function checkMatch() {
+    const statusEl = document.getElementById("judgment-status");
+    
+    if (!savedQrItf && !savedBarItf) {
+        statusEl.innerText = "QRとバーコードを読み取ってください";
+        statusEl.className = "status waiting";
+    } else if (savedQrItf && !savedBarItf) {
+        statusEl.innerText = "バーコード(ITF)を読み取ってください";
+        statusEl.className = "status waiting";
+    } else if (!savedQrItf && savedBarItf) {
+        statusEl.innerText = "QRコードを読み取ってください";
+        statusEl.className = "status waiting";
+    } else {
+        // 両方揃ったら一致しているか比較
+        if (savedQrItf === savedBarItf) {
+            statusEl.innerText = "【一致】判定OK！";
+            statusEl.className = "status match";
             
-            return {
-                itf: safeSub(text, 0, 14),           // レジスタ1〜7 (14文字)
-                partNo: safeSub(text, 14, 22),       // レジスタ8〜11 (8文字)
-                lotMix: safeSub(text, 22, 24),       // レジスタ12 (2文字)
-                mfgDate: safeSub(text, 24, 36),      // レジスタ13〜18 (12文字)
-                numbering: safeSub(text, 36, 40),    // レジスタ19〜20 (4文字)
-                productName: safeSub(text, 40, 56)   // レジスタ21〜28 (16文字)
-            };
+            // 一致したら2.5秒間スキャンを一時停止し、自動でリセットして再開
+            isPaused = true;
+            setTimeout(resetApp, 2500);
+        } else {
+            statusEl.innerText = "【不一致】エラー！ITFコードが違います";
+            statusEl.className = "status mismatch";
         }
+    }
+}
 
-        // 読み取り成功時の処理
-        function onScanSuccess(decodedText, decodedResult) {
-            const formatName = decodedResult?.result?.format?.formatName;
-            let updated = false;
-
-            // QRコードの場合 (文字数やフォーマットで判定)
-            if (formatName === "QR_CODE" || decodedText.length > 30) {
-                if (!qrData_ITF) {
-                    const parsed = parseQRCode(decodedText);
-                    qrData_ITF = parsed.itf;
-                    
-                    // UI更新
-                    document.getElementById("res-itf").innerText = parsed.itf;
-                    document.getElementById("res-part").innerText = parsed.partNo;
-                    document.getElementById("res-lot").innerText = parsed.lotMix;
-                    document.getElementById("res-date").innerText = parsed.mfgDate;
-                    document.getElementById("res-num").innerText = parsed.numbering;
-                    document.getElementById("res-name").innerText = parsed.productName;
-                    document.getElementById("qr-result").style.display = "block";
-                    updated = true;
-                }
-            } 
-            // ITFバーコードの場合 (ITFフォーマット、または14桁の数字)
-            else if (formatName === "ITF" || /^\d{14}$/.test(decodedText)) {
-                if (!barcodeData_ITF) {
-                    barcodeData_ITF = decodedText;
-                    document.getElementById("res-barcode").innerText = barcodeData_ITF;
-                    document.getElementById("barcode-result").style.display = "block";
-                    updated = true;
-                }
-            }
-
-            if (updated) {
-                vibrate();
-                checkMatch();
-            }
-        }
-
-        // 照合判定
-        function checkMatch() {
-            const statusEl = document.getElementById("status");
-            
-            if (qrData_ITF && barcodeData_ITF) {
-                if (qrData_ITF === barcodeData_ITF) {
-                    statusEl.innerText = "✅ 照合OK：ITFコードが一致しました！";
-                    statusEl.className = "status-box status-ok";
-                } else {
-                    statusEl.innerText = "❌ 照合NG：ITFコードが不一致です。";
-                    statusEl.className = "status-box status-ng";
-                }
-            } else if (qrData_ITF) {
-                statusEl.innerText = "QRコード読取済。比較するバーコードをスキャンしてください。";
-                statusEl.className = "status-box status-wait";
-            } else if (barcodeData_ITF) {
-                statusEl.innerText = "バーコード読取済。比較するQRコードをスキャンしてください。";
-                statusEl.className = "status-box status-wait";
-            }
-        }
-
-        // リセット処理
-        function resetApp() {
-            qrData_ITF = null;
-            barcodeData_ITF = null;
-            
-            document.getElementById("qr-result").style.display = "none";
-            document.getElementById("barcode-result").style.display = "none";
-            
-            const statusEl = document.getElementById("status");
-            statusEl.innerText = "QRコード、またはバーコードをスキャンしてください";
-            statusEl.className = "status-box";
-        }
-
-        // カメラ起動
-        function startScanner() {
-            html5QrCode = new Html5Qrcode("reader");
-            
-            // 変更点1: QRコードとITFバーコードのみに絞って処理を高速化
-            const config = { 
-                fps: 10, 
-                qrbox: { width: 250, height: 250 },
-                formatsToSupport: [
-                    Html5QrcodeSupportedFormats.QR_CODE,
-                    Html5QrcodeSupportedFormats.ITF
-                ]
-            };
-
-            // 変更点2: カメラの解像度をフルHD相当に引き上げる（細かいQRを読むため）
-            const videoConstraints = {
-                facingMode: "environment",
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-                advanced: [{ focusMode: "continuous" }]
-            };
-
-            html5QrCode.start(videoConstraints, config, onScanSuccess)
-            .then(() => {
-                resetApp();
-            })
-            .catch(err => {
-                document.getElementById("status").innerText = "カメラの起動に失敗しました。Safariの設定でカメラへのアクセスを許可してください。";
-                document.getElementById("status").className = "status-box status-ng";
-                console.error(err);
-            });
-        }
-        // ページ読み込み時にカメラ起動
-        window.onload = startScanner;
-    </script>
+// データを初期化して次のスキャンに備える
+function resetApp() {
+    savedQrItf = null;
+    savedBarItf = null;
+    document.getElementById("qr-itf").innerText = "---";
+    document.getElementById("qr-name").innerText = "---";
+    document.getElementById("qr-num").innerText = "---";
+    document.getElementById("qr-title").innerText = "---";
+    document.getElementById("qr-raw").innerText = "---";
+    document.getElementById("bar-itf").innerText = "---";
+    checkMatch();
+    isPaused = false; // スキャンを再開
+}
+</script>
 </body>
 </html>
