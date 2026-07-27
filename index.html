@@ -291,7 +291,7 @@
             // フォーマットを限定して初期化
             html5QrCode = new Html5Qrcode("reader", { formatsToSupport: formats });
             
-            const config = { fps: 2, qrbox: boxSize };
+            const config = { fps: 30, qrbox: boxSize };
             const cameraConfig = { facingMode: "environment" };
 
             html5QrCode.start(cameraConfig, config, onScanSuccess)
