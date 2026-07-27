@@ -80,7 +80,7 @@ let savedQrItf = null;
 let savedBarItf = null;
 let isScanning = false;
 
-// Safariに対応した確実なカメラ初期化
+// カメラ初期化
 async function initCamera() {
     startBtn.style.display = "none";
     container.style.display = "block";
@@ -90,12 +90,16 @@ async function initCamera() {
             video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
         });
         video.srcObject = stream;
-        video.setAttribute("playsinline", true); // iOS Safariで必須
-        video.play();
-        isScanning = true;
-        requestAnimationFrame(tick);
+        video.setAttribute("playsinline", true);
+        
+        // 動画が実際に再生可能になったら解析をスタートする（過負荷対策）
+        video.onloadedmetadata = () => {
+            video.play();
+            isScanning = true;
+            requestAnimationFrame(tick);
+        };
     } catch (err) {
-        alert("カメラの起動に失敗しました。Safariの設定でカメラ許可が『確認』または『許可』になっているか再度ご確認ください。");
+        alert("カメラの起動に失敗しました。Safariの設定でカメラ許可をご確認ください。");
         startBtn.style.display = "block";
         container.style.display = "none";
     }
@@ -105,6 +109,7 @@ async function initCamera() {
 function tick() {
     if (!isScanning) return;
 
+    // カメラの準備が完全に整っている時だけ画像解析を実行する（安全弁）
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
         canvasElement.height = video.videoHeight;
         canvasElement.width = video.videoWidth;
@@ -112,45 +117,35 @@ function tick() {
         
         const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
         
-        // jsQRによる解析実行
         const code = jsQR(imageData.data, imageData.width, imageData.height, {
             inversionAttempts: "dontInvert",
         });
 
         if (code) {
-            // 読み取ったデータ
             const rawData = code.data;
-
-            // 【判定】桁数が大きい、または特定の条件でQRコードとみなす（仕様に合わせて調整）
-            // 14桁を超える、かつ文字にアルファベットやカナが含まれる場合はQRコードとして処理
+            // 14桁を超える、またはアルファベットやカナが含まれる場合はQR、それ以外はバーコード
             if (rawData.length >= 14 && (/[a-zA-Z\uFF65-\uFF9F]/.test(rawData) || rawData.length > 20)) {
                 processQrData(rawData);
             } else {
-                // それ以外（14桁前後の数字のみなど）はITFバーコードとして処理
                 processBarcodeData(rawData);
             }
         }
     }
+    
+    // 次のフレームを要求（常に安全にループさせるためifの外に配置）
     requestAnimationFrame(tick);
 }
 
-// QRコードのデータ固定長切り出し（ご提示のレジスタ仕様に基づく）
+// QRコードのデータ固定長切り出し
 function processQrData(text) {
     document.getElementById("qr-raw").innerText = text;
 
-    // レジスタNo1〜7：ITFコード（14桁）＝ 0文字目から14文字
+    // 仕様に準拠した切り出し（1文字目=インデックス0）
     savedQrItf = text.slice(0, 14).trim();
-    
-    // レジスタNo8〜11：品番（8桁）＝ 14文字目から8文字
     const pinban = text.slice(14, 22).trim();
-    
-    // レジスタNo19〜20：ナンバリング（4桁）＝ レジスタ1-18が36文字なので、36文字目から4文字
     const numbering = text.slice(36, 40).trim();
-    
-    // レジスタNo21〜28：品名（16桁）＝ レジスタ1-20が40文字なので、40文字目から16文字
     const hinmei = text.slice(40, 56).trim();
 
-    // 画面に表示
     document.getElementById("qr-itf").innerText = savedQrItf;
     document.getElementById("qr-name").innerText = pinban;
     document.getElementById("qr-num").innerText = numbering;
@@ -161,12 +156,14 @@ function processQrData(text) {
 
 // バーコード（ITF）データの処理
 function processBarcodeData(text) {
-    // 数字のみを抽出（余計な空白などを排除）
     const cleanBar = text.replace(/[^0-9]/g, "");
-    if (cleanBar.length >= 13) { // ITFは通常14桁（稀に13桁）
-        savedBarItf = cleanBar;
-        document.getElementById("bar-itf").innerText = savedBarItf;
-        checkMatch();
+    if (cleanBar.length >= 13) {
+        // すでに保存されている値と違う場合のみ更新（チカチカ防止）
+        if (savedBarItf !== cleanBar) {
+            savedBarItf = cleanBar;
+            document.getElementById("bar-itf").innerText = savedBarItf;
+            checkMatch();
+        }
     }
 }
 
@@ -184,11 +181,9 @@ function checkMatch() {
         statusEl.innerText = "QRコードを読み取ってください";
         statusEl.className = "status waiting";
     } else {
-        // 両方揃ったら比較
         if (savedQrItf === savedBarItf) {
             statusEl.innerText = "【一致】判定OK！";
             statusEl.className = "status match";
-            // 一致したら2.5秒後に次の検査のためにリセット
             isScanning = false;
             setTimeout(resetData, 2500);
         } else {
