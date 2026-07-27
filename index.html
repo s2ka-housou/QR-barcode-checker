@@ -4,19 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QR・バーコード照合アプリ</title>
-    <!-- QR・バーコード解析用の超高機能ライブラリを読み込み -->
-    <script src="https://unpkg.com"></script>
+    <!-- iOS Safariで最も安定して動くjsQRライブラリを使用 -->
+    <script src="https://jsdelivr.net"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; background: #f5f5f7; color: #333; }
-        h1 { font-size: 20px; text-align: center; margin-bottom: 20px; }
-        .card { background: white; padding: 16px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 16px; }
+        h1 { font-size: 18px; text-align: center; margin-bottom: 16px; }
+        .card { background: white; padding: 14px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 12px; }
         button { width: 100%; padding: 14px; background: #0071e3; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-        button:active { background: #005bb5; }
-        #reader { width: 100%; max-width: 400px; margin: 0 auto; border-radius: 8px; overflow: hidden; }
-        .result-box { margin-top: 12px; padding: 12px; border-radius: 8px; background: #f0f0f2; font-size: 14px; line-height: 1.6; }
-        .label { font-weight: bold; color: #666; font-size: 12px; margin-top: 6px; }
-        .value { font-size: 16px; color: #000; word-break: break-all; margin-bottom: 8px; }
-        .status { text-align: center; font-size: 20px; font-weight: bold; padding: 12px; border-radius: 8px; margin-top: 12px; }
+        button:disabled { background: #ccc; }
+        #canvas-container { position: relative; width: 100%; max-width: 360px; margin: 0 auto; display: none; border-radius: 8px; overflow: hidden; background: #000; }
+        video { width: 100%; height: auto; display: block; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .result-box { margin-top: 8px; padding: 10px; border-radius: 8px; background: #f0f0f2; font-size: 14px; line-height: 1.5; }
+        .label { font-weight: bold; color: #666; font-size: 11px; margin-top: 4px; }
+        .value { font-size: 15px; color: #000; font-family: monospace; font-weight: bold; margin-bottom: 4px; word-break: break-all; }
+        .status { text-align: center; font-size: 18px; font-weight: bold; padding: 12px; border-radius: 8px; margin-top: 8px; }
         .match { background: #e2fbe8; color: #1e7e34; }
         .mismatch { background: #fce8e6; color: #c53929; }
         .waiting { background: #fff3cd; color: #856404; }
@@ -28,113 +30,147 @@
 
     <!-- 1. カメラエリア -->
     <div class="card">
-        <div id="reader"></div>
-        <div style="margin-top: 12px;">
-            <button id="start-btn" onclick="startScanner()">スキャンを開始する</button>
+        <button id="start-btn" onclick="initCamera()">スキャンを開始する</button>
+        <div id="canvas-container">
+            <video id="video" playsinline></video>
+            <canvas id="canvas"></canvas>
         </div>
     </div>
 
-    <!-- 2. QRコード読み取り結果 -->
+    <!-- 2. 照合判定ステータス -->
     <div class="card">
-        <h3>① QRコードデータ</h3>
+        <h3>照合判定</h3>
+        <div id="judgment-status" class="status waiting">QRとバーコードを読み取ってください</div>
+    </div>
+
+    <!-- 3. QRコード読み取り結果 -->
+    <div class="card">
+        <h3>① QRコード解析結果</h3>
         <div class="result-box">
-            <div class="label">ITFコード (品番)</div>
+            <div class="label">ITFコード (レジスタ1-7: 14桁)</div>
             <div id="qr-itf" class="value">---</div>
-            <div class="label">品名</div>
+            <div class="label">品番 (レジスタ8-11: 8桁)</div>
             <div id="qr-name" class="value">---</div>
-            <div class="label">ナンバリング</div>
+            <div class="label">ナンバリング (レジスタ19-20: 4桁)</div>
             <div id="qr-num" class="value">---</div>
-            <div class="label">生データ（全体）</div>
-            <div id="qr-raw" class="value" style="font-size:12px; color:#666;">---</div>
+            <div class="label">品名 (レジスタ21-28: 16桁)</div>
+            <div id="qr-title" class="value">---</div>
+            <div class="label">生データ（全体100文字まで）</div>
+            <div id="qr-raw" class="value" style="font-size:11px; color:#777; font-weight:normal;">---</div>
         </div>
     </div>
 
-    <!-- 3. バーコード読み取り結果 -->
+    <!-- 4. バーコード読み取り結果 -->
     <div class="card">
-        <h3>② バーコード (ITF)</h3>
+        <h3>② バーコード (ITF) 読取結果</h3>
         <div class="result-box">
             <div class="label">読み取ったITFコード</div>
             <div id="bar-itf" class="value">---</div>
         </div>
     </div>
 
-    <!-- 4. 照合判定ステータス -->
-    <div class="card">
-        <h3>③ 照合判定</h3>
-        <div id="judgment-status" class="status waiting">QRとバーコードを読み取ってください</div>
-    </div>
-
 <script>
-let html5QrcodeScanner = null;
+const video = document.getElementById('video');
+const canvasElement = document.getElementById('canvas');
+const canvas = canvasElement.getContext('2d');
+const startBtn = document.getElementById('start-btn');
+const container = document.getElementById('canvas-container');
+
 let savedQrItf = null;
 let savedBarItf = null;
+let isScanning = false;
 
-// スキャナーの起動
-function startScanner() {
-    document.getElementById("start-btn").style.display = "none";
+// Safariに対応した確実なカメラ初期化
+async function initCamera() {
+    startBtn.style.display = "none";
+    container.style.display = "block";
     
-    // QRコードと主要なバーコード（ITF含む）を同時に読み取る設定
-    html5QrcodeScanner = new Html5Qrcode("reader");
-    
-    const config = { 
-        fps: 10, 
-        qrbox: function(width, height) {
-            return { width: width * 0.8, height: height * 0.4 }; // 横長の読み取り枠
-        }
-    };
-
-    html5QrcodeScanner.start(
-        { facingMode: "environment" }, // 背面カメラを使用
-        config,
-        onScanSuccess
-    ).catch(err => {
-        alert("カメラの起動に失敗しました。HTTPS通信であることと、カメラ許可を確認してください。");
-        document.getElementById("start-btn").style.display = "block";
-    });
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
+        });
+        video.srcObject = stream;
+        video.setAttribute("playsinline", true); // iOS Safariで必須
+        video.play();
+        isScanning = true;
+        requestAnimationFrame(tick);
+    } catch (err) {
+        alert("カメラの起動に失敗しました。Safariの設定でカメラ許可が『確認』または『許可』になっているか再度ご確認ください。");
+        startBtn.style.display = "block";
+        container.style.display = "none";
+    }
 }
 
-// 読み取り成功時の処理
-function onScanSuccess(decodedText, decodedResult) {
-    const formatName = decodedResult.result.format.formatName;
-    
-    // 【判定】QRコードを読み取った場合
-    if (formatName === "QR_CODE") {
-        document.getElementById("qr-raw").innerText = decodedText;
-        
-        /* 
-          ★データ仕分けのロジック★
-          ※ここでは仮に「カンマ（,）」でデータが区切られていると想定しています。
-          例: "ITF123456789,型番A-1,No_001" 
-          実際のQRのデータ形式に合わせて後からこの部分を書き換えます。
-        */
-        const items = decodedText.split(","); 
-        
-        if (items.length >= 1) {
-            savedQrItf = items[0].trim(); // 1番目をITFコードとする
-            document.getElementById("qr-itf").innerText = savedQrItf;
-        }
-        if (items.length >= 2) {
-            document.getElementById("qr-name").innerText = items[1].trim(); // 2番目を品名
-        }
-        if (items.length >= 3) {
-            document.getElementById("qr-num").innerText = items[2].trim(); // 3番目をナンバリング
-        }
-        
-        // ピッと音を鳴らす（スマホのバイブや音はブラウザ制限があるため簡易的に視覚効果）
-        vibrateSimple();
-    } 
-    // 【判定】バーコード（ITFなど）を読み取った場合
-    else if (formatName === "ITF" || formatName === "CODE_128" || formatName === "EAN_13") {
-        savedBarItf = decodedText.trim();
-        document.getElementById("bar-itf").innerText = savedBarItf;
-        vibrateSimple();
-    }
+// 毎フレームの解析ループ
+function tick() {
+    if (!isScanning) return;
 
-    // 毎回、照合チェックを実行
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvasElement.height = video.videoHeight;
+        canvasElement.width = video.videoWidth;
+        canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+        
+        const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+        
+        // jsQRによる解析実行
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "dontInvert",
+        });
+
+        if (code) {
+            // 読み取ったデータ
+            const rawData = code.data;
+
+            // 【判定】桁数が大きい、または特定の条件でQRコードとみなす（仕様に合わせて調整）
+            // 14桁を超える、かつ文字にアルファベットやカナが含まれる場合はQRコードとして処理
+            if (rawData.length >= 14 && (/[a-zA-Z\uFF65-\uFF9F]/.test(rawData) || rawData.length > 20)) {
+                processQrData(rawData);
+            } else {
+                // それ以外（14桁前後の数字のみなど）はITFバーコードとして処理
+                processBarcodeData(rawData);
+            }
+        }
+    }
+    requestAnimationFrame(tick);
+}
+
+// QRコードのデータ固定長切り出し（ご提示のレジスタ仕様に基づく）
+function processQrData(text) {
+    document.getElementById("qr-raw").innerText = text;
+
+    // レジスタNo1〜7：ITFコード（14桁）＝ 0文字目から14文字
+    savedQrItf = text.slice(0, 14).trim();
+    
+    // レジスタNo8〜11：品番（8桁）＝ 14文字目から8文字
+    const pinban = text.slice(14, 22).trim();
+    
+    // レジスタNo19〜20：ナンバリング（4桁）＝ レジスタ1-18が36文字なので、36文字目から4文字
+    const numbering = text.slice(36, 40).trim();
+    
+    // レジスタNo21〜28：品名（16桁）＝ レジスタ1-20が40文字なので、40文字目から16文字
+    const hinmei = text.slice(40, 56).trim();
+
+    // 画面に表示
+    document.getElementById("qr-itf").innerText = savedQrItf;
+    document.getElementById("qr-name").innerText = pinban;
+    document.getElementById("qr-num").innerText = numbering;
+    document.getElementById("qr-title").innerText = hinmei;
+
     checkMatch();
 }
 
-// 照合判定を行う関数
+// バーコード（ITF）データの処理
+function processBarcodeData(text) {
+    // 数字のみを抽出（余計な空白などを排除）
+    const cleanBar = text.replace(/[^0-9]/g, "");
+    if (cleanBar.length >= 13) { // ITFは通常14桁（稀に13桁）
+        savedBarItf = cleanBar;
+        document.getElementById("bar-itf").innerText = savedBarItf;
+        checkMatch();
+    }
+}
+
+// 照合判定
 function checkMatch() {
     const statusEl = document.getElementById("judgment-status");
     
@@ -142,40 +178,39 @@ function checkMatch() {
         statusEl.innerText = "QRとバーコードを読み取ってください";
         statusEl.className = "status waiting";
     } else if (savedQrItf && !savedBarItf) {
-        statusEl.innerText = "バーコードを読み取ってください";
+        statusEl.innerText = "バーコード(ITF)を読み取ってください";
         statusEl.className = "status waiting";
     } else if (!savedQrItf && savedBarItf) {
         statusEl.innerText = "QRコードを読み取ってください";
         statusEl.className = "status waiting";
     } else {
-        // 両方揃ったら一致しているか比較
+        // 両方揃ったら比較
         if (savedQrItf === savedBarItf) {
             statusEl.innerText = "【一致】判定OK！";
             statusEl.className = "status match";
-            // 成功したら3秒後に次のスキャンへ向けてリセット（実用性を考慮）
-            setTimeout(resetData, 3000);
+            // 一致したら2.5秒後に次の検査のためにリセット
+            isScanning = false;
+            setTimeout(resetData, 2500);
         } else {
-            statusEl.innerText = "【不一致】エラー！コードが違います";
+            statusEl.innerText = "【不一致】エラー！ITFコードが違います";
             statusEl.className = "status mismatch";
         }
     }
 }
 
-// データを初期化して次のスキャンに備える
+// 判定成功後のデータリセットと再開
 function resetData() {
     savedQrItf = null;
     savedBarItf = null;
     document.getElementById("qr-itf").innerText = "---";
     document.getElementById("qr-name").innerText = "---";
     document.getElementById("qr-num").innerText = "---";
+    document.getElementById("qr-title").innerText = "---";
     document.getElementById("qr-raw").innerText = "---";
     document.getElementById("bar-itf").innerText = "---";
     checkMatch();
-}
-
-// 簡易的な読み取り成功の視覚フィードバック（画面を一瞬光らせる）
-function vibrateSimple() {
-    if (navigator.vibrate) navigator.vibrate(200); // Androidなら振動
+    isScanning = true;
+    requestAnimationFrame(tick);
 }
 </script>
 </body>
