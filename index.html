@@ -4,17 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QR・バーコード照合アプリ</title>
-    <!-- iOS Safariで最も安定して動くjsQRライブラリを使用 -->
-    <script src="https://jsdelivr.net"></script>
+    <!-- 世界で最も使われている超軽量・多機能なZXingライブラリを使用（QRもITFもこれ1つで高速処理） -->
+    <script src="https://unpkg.com"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; background: #f5f5f7; color: #333; }
         h1 { font-size: 18px; text-align: center; margin-bottom: 16px; }
         .card { background: white; padding: 14px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 12px; }
         button { width: 100%; padding: 14px; background: #0071e3; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-        button:disabled { background: #ccc; }
-        #canvas-container { position: relative; width: 100%; max-width: 360px; margin: 0 auto; display: none; border-radius: 8px; overflow: hidden; background: #000; }
+        #camera-area { position: relative; width: 100%; max-width: 360px; margin: 0 auto; display: none; border-radius: 8px; overflow: hidden; background: #000; }
         video { width: 100%; height: auto; display: block; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         .result-box { margin-top: 8px; padding: 10px; border-radius: 8px; background: #f0f0f2; font-size: 14px; line-height: 1.5; }
         .label { font-weight: bold; color: #666; font-size: 11px; margin-top: 4px; }
         .value { font-size: 15px; color: #000; font-family: monospace; font-weight: bold; margin-bottom: 4px; word-break: break-all; }
@@ -31,9 +29,8 @@
     <!-- 1. カメラエリア -->
     <div class="card">
         <button id="start-btn" onclick="initCamera()">スキャンを開始する</button>
-        <div id="canvas-container">
-            <video id="video" playsinline></video>
-            <canvas id="canvas"></canvas>
+        <div id="camera-area">
+            <video id="video"></video>
         </div>
     </div>
 
@@ -55,7 +52,7 @@
             <div id="qr-num" class="value">---</div>
             <div class="label">品名 (レジスタ21-28: 16桁)</div>
             <div id="qr-title" class="value">---</div>
-            <div class="label">生データ（全体100文字まで）</div>
+            <div class="label">生データ（全体）</div>
             <div id="qr-raw" class="value" style="font-size:11px; color:#777; font-weight:normal;">---</div>
         </div>
     </div>
@@ -70,81 +67,69 @@
     </div>
 
 <script>
-const video = document.getElementById('video');
-const canvasElement = document.getElementById('canvas');
-const canvas = canvasElement.getContext('2d');
-const startBtn = document.getElementById('start-btn');
-const container = document.getElementById('canvas-container');
-
+let codeReader = null;
 let savedQrItf = null;
 let savedBarItf = null;
-let isScanning = false;
+let currentDeviceId = null;
 
 // カメラ初期化
 async function initCamera() {
-    startBtn.style.display = "none";
-    container.style.display = "block";
+    document.getElementById('start-btn').style.display = "none";
+    document.getElementById('camera-area').style.display = "block";
     
+    // QRコードとITF(バーコード)の両方を同時に読み込む設定
+    const hints = new Map();
+    const formats = [
+        ZXing.BarcodeFormat.QR_CODE,
+        ZXing.BarcodeFormat.ITF
+    ];
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+    
+    codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
-        });
-        video.srcObject = stream;
-        video.setAttribute("playsinline", true);
-        
-        // 動画が実際に再生可能になったら解析をスタートする（過負荷対策）
-        video.onloadedmetadata = () => {
-            video.play();
-            isScanning = true;
-            requestAnimationFrame(tick);
-        };
+        // 背面カメラの取得
+        const videoInputDevices = await codeReader.listVideoInputDevices();
+        // 背面カメラ(environment)を優先して選択
+        const backCamera = videoInputDevices.find(device => device.label.toLowerCase().includes('back') || device.label.toLowerCase().includes('環境') || device.label.toLowerCase().includes('背面'));
+        currentDeviceId = backCamera ? backCamera.deviceId : videoInputDevices[0].deviceId;
+
+        // スキャン開始（ZXingが内部で自動ループ処理するため超軽量）
+        startScanning();
     } catch (err) {
         alert("カメラの起動に失敗しました。Safariの設定でカメラ許可をご確認ください。");
-        startBtn.style.display = "block";
-        container.style.display = "none";
+        document.getElementById('start-btn').style.display = "block";
+        document.getElementById('camera-area').style.display = "none";
     }
 }
 
-// 毎フレームの解析ループ
-function tick() {
-    if (!isScanning) return;
+function startScanning() {
+    codeReader.decodeFromVideoDevice(currentDeviceId, 'video', (result, err) => {
+        if (result) {
+            const rawData = result.getText();
+            const formatName = result.getBarcodeFormat();
 
-    // カメラの準備が完全に整っている時だけ画像解析を実行する（安全弁）
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        canvasElement.height = video.videoHeight;
-        canvasElement.width = video.videoWidth;
-        canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
-        
-        const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
-        
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: "dontInvert",
-        });
-
-        if (code) {
-            const rawData = code.data;
-            // 14桁を超える、またはアルファベットやカナが含まれる場合はQR、それ以外はバーコード
-            if (rawData.length >= 14 && (/[a-zA-Z\uFF65-\uFF9F]/.test(rawData) || rawData.length > 20)) {
+            // 【判定】QRコードの場合
+            if (formatName === 0 || result.barcodeFormat === ZXing.BarcodeFormat.QR_CODE) { 
                 processQrData(rawData);
-            } else {
+            } 
+            // 【判定】ITF（バーコード）の場合
+            else if (formatName === 11 || result.barcodeFormat === ZXing.BarcodeFormat.ITF) {
                 processBarcodeData(rawData);
             }
         }
-    }
-    
-    // 次のフレームを要求（常に安全にループさせるためifの外に配置）
-    requestAnimationFrame(tick);
+    });
 }
 
 // QRコードのデータ固定長切り出し
 function processQrData(text) {
     document.getElementById("qr-raw").innerText = text;
 
-    // 仕様に準拠した切り出し（1文字目=インデックス0）
-    savedQrItf = text.slice(0, 14).trim();
-    const pinban = text.slice(14, 22).trim();
-    const numbering = text.slice(36, 40).trim();
-    const hinmei = text.slice(40, 56).trim();
+    // ご提示のレジスタ仕様（半角1文字=インデックス1つ分）に準拠した正確な切り出し
+    savedQrItf = text.slice(0, 14).trim();       // レジスタ1-7 (14桁)
+    const pinban = text.slice(14, 22).trim();     // レジスタ8-11 (8桁)
+    const numbering = text.slice(36, 40).trim();  // レジスタ19-20 (4桁)
+    const hinmei = text.slice(40, 56).trim();     // レジスタ21-28 (16桁)
 
     document.getElementById("qr-itf").innerText = savedQrItf;
     document.getElementById("qr-name").innerText = pinban;
@@ -158,7 +143,6 @@ function processQrData(text) {
 function processBarcodeData(text) {
     const cleanBar = text.replace(/[^0-9]/g, "");
     if (cleanBar.length >= 13) {
-        // すでに保存されている値と違う場合のみ更新（チカチカ防止）
         if (savedBarItf !== cleanBar) {
             savedBarItf = cleanBar;
             document.getElementById("bar-itf").innerText = savedBarItf;
@@ -184,7 +168,8 @@ function checkMatch() {
         if (savedQrItf === savedBarItf) {
             statusEl.innerText = "【一致】判定OK！";
             statusEl.className = "status match";
-            isScanning = false;
+            // 一致したらスキャンを一時停止し、2.5秒後にリセットして再開
+            codeReader.reset();
             setTimeout(resetData, 2500);
         } else {
             statusEl.innerText = "【不一致】エラー！ITFコードが違います";
@@ -193,7 +178,7 @@ function checkMatch() {
     }
 }
 
-// 判定成功後のデータリセットと再開
+// データリセットとスキャン再開
 function resetData() {
     savedQrItf = null;
     savedBarItf = null;
@@ -204,8 +189,7 @@ function resetData() {
     document.getElementById("qr-raw").innerText = "---";
     document.getElementById("bar-itf").innerText = "---";
     checkMatch();
-    isScanning = true;
-    requestAnimationFrame(tick);
+    startScanning();
 }
 </script>
 </body>
