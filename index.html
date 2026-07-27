@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f172a">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="QR照合">
+  <meta name="apple-mobile-web-app-title" content="コード照合">
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
   <link rel="manifest" href="manifest.webmanifest">
   <title>QR・ITF コード照合</title>
@@ -513,9 +513,17 @@
       let mfgLot = rawDateTime;
       let mfgTime = "";
 
-      if (/^\d{12}$/.test(rawDateTime)) {
+      // レジスタNo.13～18（12文字）:
+      // 製造ロット6文字 + 時2文字 + 分2文字 + 秒2文字
+      // 例: BA6727133415 → BA6727 / 13時34分15秒
+      if (rawDateTime.length === 12) {
         mfgLot = rawDateTime.substring(0, 6);
-        mfgTime = `${rawDateTime.substring(6, 8)}時${rawDateTime.substring(8, 10)}分${rawDateTime.substring(10, 12)}秒`;
+        const hour = rawDateTime.substring(6, 8);
+        const minute = rawDateTime.substring(8, 10);
+        const second = rawDateTime.substring(10, 12);
+        mfgTime = /^\d{2}$/.test(`${hour}${minute}${second}`)
+          ? `${hour}時${minute}分${second}秒`
+          : `${hour}:${minute}:${second}`;
       }
 
       return {
