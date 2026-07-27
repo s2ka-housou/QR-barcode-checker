@@ -181,6 +181,43 @@
       line-height: 1.5;
     }
 
+    #install-guide {
+      width: min(100%, 680px);
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: max(34px, env(safe-area-inset-top)) 28px max(34px, env(safe-area-inset-bottom));
+      background: #fff;
+      color: #333;
+    }
+
+    #install-guide h1 {
+      margin: 0 0 44px;
+      color: #333;
+      font-size: 1.45rem;
+      font-weight: 500;
+      text-align: left;
+    }
+
+    #install-guide ol {
+      margin: 0;
+      padding-left: 1.55em;
+      font-size: 1.16rem;
+      line-height: 1.55;
+    }
+
+    #install-guide li {
+      margin-bottom: 22px;
+      padding-left: .3em;
+    }
+
+    #install-guide .note {
+      display: block;
+      margin-top: 10px;
+      color: #dc2626;
+      font-size: .86em;
+      line-height: 1.45;
+    }
+
     .spinner {
       display: inline-block;
       width: 1em;
@@ -198,7 +235,24 @@
 </head>
 
 <body>
-  <main>
+  <section id="install-guide" hidden>
+    <h1>ホーム画面への登録方法</h1>
+    <ol>
+      <li>Safariでこのページを開きます。</li>
+      <li>
+        「共有⇧」をタップします。
+        <span class="note">※ 共有アイコンが表示されていない場合は、「…」をタップしてください。</span>
+      </li>
+      <li>「ホーム画面に追加」をタップします。</li>
+      <li>
+        「ホーム画面に追加」画面で、右上の「追加」をタップします。
+        <span class="note">※「Webアプリとして開く」が表示されている場合は、ONにしてください。</span>
+      </li>
+      <li>ホーム画面に追加されたアイコンから、次回以降このアプリを起動してください。</li>
+    </ol>
+  </section>
+
+  <main id="app-screen" hidden>
     <h1>QR・ITF コード照合</h1>
     <p class="lead">ラベル全体が写った写真を選択すると、QRコードとITFバーコードを個別に解析して照合します。</p>
 
@@ -256,6 +310,19 @@
     let sourceCanvas = null;
     let qrData = null;
     let barcodeData = null;
+
+    function isStandaloneApp() {
+      return window.navigator.standalone === true ||
+        window.matchMedia("(display-mode: standalone)").matches;
+    }
+
+    function updateDisplayMode() {
+      const standalone = isStandaloneApp();
+      document.getElementById("install-guide").hidden = standalone;
+      document.getElementById("app-screen").hidden = !standalone;
+    }
+
+    updateDisplayMode();
 
     input.addEventListener("change", async (event) => {
       const [file] = event.target.files;
