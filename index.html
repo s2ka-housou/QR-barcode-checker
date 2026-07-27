@@ -259,12 +259,12 @@
     <section class="card">
       <!-- ブラウザの安全仕様上、写真ライブラリはユーザーのタップでのみ開けます。 -->
       <label class="file-button" for="photo-input">
-        写真を選択して解析
+        写真を選択
         <input id="photo-input" type="file" accept="image/*">
       </label>
     </section>
 
-    <div id="status" role="status" aria-live="polite">写真を選択してください</div>
+    <div id="status" role="status" aria-live="polite" hidden></div>
 
     <section id="preview-wrap" class="card">
       <strong>選択した画像</strong>
@@ -342,7 +342,7 @@
       document.getElementById("qr-result").classList.remove("visible");
       document.getElementById("barcode-result").classList.remove("visible");
       resetButton.hidden = true;
-      setStatus("写真を選択してください");
+      setStatus("");
     });
 
     async function analyseFile(file) {
@@ -654,12 +654,19 @@
 
     function setBusy(message) {
       const status = document.getElementById("status");
+      status.hidden = false;
       status.innerHTML = `<span class="spinner" aria-hidden="true"></span>${escapeHtml(message)}`;
       status.dataset.type = "working";
     }
 
     function setStatus(message, type = "") {
       const status = document.getElementById("status");
+      status.hidden = !message;
+      if (!message) {
+        status.textContent = "";
+        status.dataset.type = "";
+        return;
+      }
       status.textContent = message;
       status.dataset.type = type;
     }
