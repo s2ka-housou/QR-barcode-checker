@@ -322,32 +322,37 @@
             statusEl.className = "status-box";
         }
 
-        // カメラ起動処理（ボタンを押した時に発火）
         function startScanner() {
-            if(isScanning) return;
-            
-            // UIの切り替え
-            document.getElementById("btn-start").style.display = "none";
-            document.getElementById("reader").style.display = "block";
-            document.getElementById("status").style.display = "block";
-            document.getElementById("btn-reset").style.display = "block";
+    if (isScanning) return;
 
-            html5QrCode = new Html5Qrcode("reader");
-            
-            const config = { fps: 10 };
-            const cameraConfig = { facingMode: "environment" };
+    document.getElementById("btn-start").style.display = "none";
+    document.getElementById("reader").style.display = "block";
+    document.getElementById("status").style.display = "block";
+    document.getElementById("btn-reset").style.display = "block";
 
-            html5QrCode.start(cameraConfig, config, onScanSuccess)
-            .then(() => {
-                isScanning = true;
-                resetApp();
-            })
-            .catch(err => {
-                document.getElementById("status").innerText = "カメラの起動に失敗しました。";
-                document.getElementById("status").className = "status-box status-ng";
-                console.error(err);
-            });
-        }
+    html5QrCode = new Html5Qrcode("reader");
+
+    const config = {
+        fps: 8,
+        qrbox: { width: 280, height: 280 },
+        aspectRatio: 1.333334,
+        disableFlip: true,
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE]
+    };
+
+    const cameraConfig = { facingMode: { ideal: "environment" } };
+
+    html5QrCode.start(cameraConfig, config, onScanSuccess)
+        .then(() => {
+            isScanning = true;
+            // resetApp();  ← ここは一度外して挙動確認
+        })
+        .catch(err => {
+            document.getElementById("status").innerText = "カメラの起動に失敗しました。";
+            document.getElementById("status").className = "status-box status-ng";
+            console.error(err);
+        });
+}
     </script>
 </body>
 </html>
