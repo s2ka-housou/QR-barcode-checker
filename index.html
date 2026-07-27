@@ -278,58 +278,44 @@
         
         async function startScanner(mode) {
             if (isScanning) return;
+        
             currentMode = mode;
         
             document.getElementById("btn-qr").style.display = "none";
             document.getElementById("btn-barcode").style.display = "none";
-            document.getElementById("btn-reset").style.display = "none";
             document.getElementById("btn-cancel").style.display = "block";
             document.getElementById("reader").style.display = "block";
         
-            let formats, boxSize, guideText;
-            if (mode === "qr") {
-                formats = [Html5QrcodeSupportedFormats.QR_CODE];
-                boxSize = { width: getQrBoxSize(), height: getQrBoxSize() };
-                guideText = "QRコードを枠内に大きく映してください";
-            } else {
-                formats = [Html5QrcodeSupportedFormats.ITF];
-                boxSize = { width: 320, height: 110 };
-                guideText = "バーコードを横長の枠内に映してください";
-            }
-        
-            document.getElementById("status").innerText = guideText;
-            document.getElementById("status").className = "status-box status-wait";
-        
-            html5QrCode = new Html5QrCode("reader");
+            const formats =
+                mode === "qr"
+                    ? [Html5QrcodeSupportedFormats.QR_CODE]
+                    : [Html5QrcodeSupportedFormats.ITF];
         
             const config = {
-                fps: mode === "qr" ? 8 : 10,
-                qrbox: boxSize,
-                aspectRatio: mode === "qr" ? 1.0 : 3.0,
-                disableFlip: true,
+                fps: 8,
+                qrbox: { width: 300, height: 300 },
                 formatsToSupport: formats
             };
         
+            html5QrCode = new Html5Qrcode("reader");
+        
             try {
                 await html5QrCode.start(
-                    { facingMode: { ideal: "environment" } },
+                    { facingMode: "environment" },
                     config,
                     onScanSuccess
                 );
         
                 isScanning = true;
         
-                // 起動後に torch / zoom を試す
-                setTimeout(() => {
-                    applyCameraEnhancements();
-                }, 300);
-        
             } catch (err) {
                 console.error(err);
+        
+                document.getElementById("status").innerText =
+                    "カメラ起動失敗: " + err.message;
+        
                 await cleanupScanner();
                 restoreUIAfterScan();
-                document.getElementById("status").innerText = "カメラ起動に失敗しました。";
-                document.getElementById("status").className = "status-box status-ng";
             }
         }
         
