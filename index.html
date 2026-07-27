@@ -208,7 +208,6 @@
         写真を選択して解析
         <input id="photo-input" type="file" accept="image/*">
       </label>
-      <p class="hint">黒地に白いコード、汚れ、反射を考慮して、反転・コントラスト強調・二値化を順に試します。</p>
     </section>
 
     <div id="status" role="status" aria-live="polite">写真を選択してください</div>
@@ -216,7 +215,6 @@
     <section id="preview-wrap" class="card">
       <strong>選択した画像</strong>
       <img id="preview" alt="選択したラベル画像のプレビュー">
-      <p class="hint">QRが右上、ITFバーコードが下側にあるレイアウトを優先して解析します。</p>
     </section>
 
     <section id="qr-result" class="card result-card">
@@ -230,13 +228,11 @@
         <tr><th>ナンバリング</th><td id="res-num"></td></tr>
         <tr><th>製品名</th><td id="res-name"></td></tr>
       </table>
-      <p id="res-qr-method" class="detail"></p>
     </section>
 
     <section id="barcode-result" class="card result-card">
       <h2>ITFバーコード</h2>
       <p id="res-barcode" class="barcode"></p>
-      <p id="res-barcode-method" class="detail"></p>
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
@@ -550,13 +546,11 @@
         setText("res-mfg-time", parsed.mfgTime);
         setText("res-num", parsed.numbering);
         setText("res-name", parsed.productName);
-        setText("res-qr-method", `読取方法：${qrData.method}`);
         qrResultBox.classList.add("visible");
       }
 
       if (barcodeData) {
         setText("res-barcode", normalizeBarcode(barcodeData.text));
-        setText("res-barcode-method", `読取方法：${barcodeData.method}`);
         barcodeResultBox.classList.add("visible");
       }
 
