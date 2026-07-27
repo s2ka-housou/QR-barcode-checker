@@ -277,7 +277,7 @@
             let formats, boxSize, guideText;
             if (mode === 'qr') {
                 formats = [Html5QrcodeSupportedFormats.QR_CODE];
-                boxSize = { width: 250, height: 250 }; // 正方形の枠
+                boxSize = { width: 360, height: 360 }; // 正方形の枠
                 guideText = "QRコードを枠内に映してください";
             } else {
                 formats = [Html5QrcodeSupportedFormats.ITF];
@@ -291,7 +291,7 @@
             // フォーマットを限定して初期化
             html5QrCode = new Html5Qrcode("reader", { formatsToSupport: formats });
             
-            const config = { fps: 15, qrbox: boxSize };
+            const config = { fps: 7, qrbox: boxSize };
             const cameraConfig = { facingMode: "environment" };
 
             html5QrCode.start(cameraConfig, config, onScanSuccess)
