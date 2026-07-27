@@ -1,324 +1,645 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="スキャン照合">
-    <title>QR・バーコード スキャン照合アプリ</title>
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #f4f7f6;
-            color: #333;
-            margin: 0;
-            padding: 16px;
-            overscroll-behavior-y: none; 
-        }
-        h1 { font-size: 1.2rem; text-align: center; margin-bottom: 16px; }
-        
-        #install-guide {
-            display: none; background: #fff; padding: 24px; border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 500px; margin: 20px auto; line-height: 1.6;
-        }
-        #install-guide h2 { font-size: 1.2rem; margin-top: 0; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
-        #install-guide ol { padding-left: 20px; }
-        #install-guide li { margin-bottom: 12px; }
-        .note { font-size: 0.85rem; color: #ef4444; display: block; margin-top: 4px; }
-        .icon-share { display: inline-block; border: 1px solid #333; padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }
-        .force-run-btn { background-color: #e5e7eb; color: #4b5563; margin-top: 24px; }
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+  >
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="スキャン照合">
+  <title>QR・バーコード スキャン照合アプリ</title>
 
-        #app-container { display: none; }
-        #reader {
-            width: 100%; max-width: 500px; margin: 0 auto 16px auto;
-            border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); background-color: #000;
-        }
-        
-        .status-box {
-            padding: 12px; border-radius: 8px; text-align: center; font-weight: bold;
-            margin-bottom: 16px; max-width: 500px; margin-left: auto; margin-right: auto;
-            background-color: #e2e8f0; color: #475569;
-        }
-        .status-ok { background-color: #d1fae5; color: #065f46; border: 2px solid #10b981; }
-        .status-ng { background-color: #fee2e2; color: #991b1b; border: 2px solid #ef4444; }
-        .status-wait { background-color: #fef3c7; color: #92400e; }
-        
-        .result-box {
-            background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 16px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05); max-width: 500px; margin-left: auto; margin-right: auto;
-        }
-        h3 { margin-top: 0; font-size: 1rem; color: #2563eb; border-bottom: 2px solid #bfdbfe; padding-bottom: 4px; }
-        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-        th, td { padding: 8px 4px; border-bottom: 1px solid #e5e7eb; text-align: left; }
-        th { width: 35%; color: #6b7280; font-weight: normal; }
-        td { font-family: monospace; font-size: 1rem; font-weight: bold; }
-        .barcode-text { font-family: monospace; font-size: 1.2rem; font-weight: bold; text-align: center; margin: 8px 0; }
-        
-        button {
-            display: block; width: 100%; max-width: 500px; margin: 0 auto 12px auto; padding: 14px;
-            color: white; border: none; border-radius: 8px; font-size: 1.1rem; font-weight: bold; cursor: pointer;
-        }
-        .btn-qr { background-color: #3b82f6; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3); }
-        .btn-qr:active { background-color: #2563eb; }
-        .btn-barcode { background-color: #f59e0b; box-shadow: 0 4px 6px rgba(245, 158, 11, 0.3); }
-        .btn-barcode:active { background-color: #d97706; }
-        .btn-reset { background-color: #9ca3af; margin-top: 24px;}
-        .btn-reset:active { background-color: #6b7280; }
-        .btn-cancel { background-color: #ef4444; display: none; margin-bottom: 16px; }
-        .btn-cancel:active { background-color: #dc2626; }
+  <!-- バージョンを固定 -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
-        .btn-done { opacity: 0.5; pointer-events: none; }
-    </style>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f4f7f6;
+      color: #333;
+      margin: 0;
+      padding: 16px;
+      overscroll-behavior-y: none;
+    }
+
+    h1 {
+      font-size: 1.2rem;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+
+    #install-guide {
+      display: none;
+      background: #fff;
+      padding: 24px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      max-width: 500px;
+      margin: 20px auto;
+      line-height: 1.6;
+    }
+
+    #install-guide h2 {
+      font-size: 1.2rem;
+      margin-top: 0;
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 8px;
+    }
+
+    #install-guide ol {
+      padding-left: 20px;
+    }
+
+    #install-guide li {
+      margin-bottom: 12px;
+    }
+
+    .icon-share {
+      display: inline-block;
+      border: 1px solid #333;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+    }
+
+    .force-run-btn {
+      background-color: #e5e7eb;
+      color: #4b5563;
+      margin-top: 24px;
+    }
+
+    #app-container {
+      display: none;
+    }
+
+    #reader {
+      width: 100%;
+      max-width: 500px;
+      margin: 0 auto 12px;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      background-color: #000;
+    }
+
+    .status-box {
+      padding: 12px;
+      border-radius: 8px;
+      text-align: center;
+      font-weight: bold;
+      margin: 0 auto 16px;
+      max-width: 500px;
+      background-color: #e2e8f0;
+      color: #475569;
+    }
+
+    .status-ok {
+      background-color: #d1fae5;
+      color: #065f46;
+      border: 2px solid #10b981;
+    }
+
+    .status-ng {
+      background-color: #fee2e2;
+      color: #991b1b;
+      border: 2px solid #ef4444;
+    }
+
+    .status-wait {
+      background-color: #fef3c7;
+      color: #92400e;
+    }
+
+    .result-box {
+      background: #fff;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    h3 {
+      margin-top: 0;
+      font-size: 1rem;
+      color: #2563eb;
+      border-bottom: 2px solid #bfdbfe;
+      padding-bottom: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    th,
+    td {
+      padding: 8px 4px;
+      border-bottom: 1px solid #e5e7eb;
+      text-align: left;
+    }
+
+    th {
+      width: 35%;
+      color: #6b7280;
+      font-weight: normal;
+    }
+
+    td {
+      font-family: monospace;
+      font-size: 1rem;
+      font-weight: bold;
+      word-break: break-all;
+    }
+
+    .barcode-text {
+      font-family: monospace;
+      font-size: 1.2rem;
+      font-weight: bold;
+      text-align: center;
+      margin: 8px 0;
+    }
+
+    button {
+      display: block;
+      width: 100%;
+      max-width: 500px;
+      margin: 0 auto 12px;
+      padding: 14px;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1.05rem;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .btn-qr {
+      background-color: #3b82f6;
+    }
+
+    .btn-barcode {
+      background-color: #f59e0b;
+    }
+
+    .btn-reset {
+      background-color: #9ca3af;
+      margin-top: 24px;
+    }
+
+    .btn-cancel {
+      background-color: #ef4444;
+      display: none;
+    }
+
+    .btn-torch {
+      background-color: #475569;
+    }
+
+    .btn-done {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    #camera-controls {
+      max-width: 500px;
+      margin: 0 auto 16px;
+    }
+
+    #zoom-area {
+      display: none;
+      background: #fff;
+      padding: 12px;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+
+    #zoom {
+      width: 100%;
+      margin-top: 8px;
+    }
+  </style>
 </head>
+
 <body>
+  <div id="install-guide">
+    <h2>ホーム画面への登録方法</h2>
+    <ol>
+      <li>Safariでこのページを開きます。</li>
+      <li>画面下部の「共有 <span class="icon-share">↑</span>」アイコンをタップします。</li>
+      <li>メニューから「ホーム画面に追加」をタップします。</li>
+      <li>右上の「追加」をタップします。</li>
+    </ol>
+    <button class="force-run-btn btn-reset" onclick="forceAppMode()">
+      ブラウザのままテスト起動する
+    </button>
+  </div>
 
-    <!-- ホーム画面追加ガイド -->
-    <div id="install-guide">
-        <h2>ホーム画面への登録方法</h2>
-        <ol>
-            <li>Safariでこのページを開きます。</li>
-            <li>画面下部の「共有 <span class="icon-share">↑</span>」アイコンをタップします。</li>
-            <li>メニューから「ホーム画面に追加」をタップします。</li>
-            <li>右上の「追加」をタップします。</li>
-        </ol>
-        <button class="force-run-btn btn-reset" onclick="forceAppMode()">ブラウザのままテスト起動する</button>
+  <div id="app-container">
+    <h1>スキャン照合</h1>
+
+    <div id="status" class="status-box">
+      読み取る種類を選択してください
     </div>
 
-    <!-- アプリ本体 -->
-    <div id="app-container">
-        <h1>スキャン照合</h1>
-        
-        <!-- 状態メッセージ -->
-        <div id="status" class="status-box">読み取る項目を選択してください</div>
+    <button id="btn-qr" class="btn-qr" onclick="startScanner('qr')">
+      QRコードをスキャン
+    </button>
 
-        <!-- スキャン操作ボタン -->
-        <button id="btn-qr" class="btn-qr" onclick="startScanner('qr')">QRコードをスキャン</button>
-        <button id="btn-barcode" class="btn-barcode" onclick="startScanner('barcode')">バーコードをスキャン</button>
-        
-        <!-- キャンセルボタン（カメラ起動中のみ表示） -->
-        <button id="btn-cancel" class="btn-cancel" onclick="cancelScanner()">スキャンをキャンセル</button>
+    <button id="btn-barcode" class="btn-barcode" onclick="startScanner('barcode')">
+      バーコードをスキャン
+    </button>
 
-        <!-- カメラ映像表示エリア -->
-        <div id="reader" style="display: none;"></div>
+    <button id="btn-cancel" class="btn-cancel" onclick="cancelScanner()">
+      スキャンをキャンセル
+    </button>
 
-        <!-- QRコード解析結果 -->
-        <div id="qr-result" class="result-box" style="display: none;">
-            <h3>QRコード情報</h3>
-            <table>
-                <tr><th>ITFコード</th><td id="res-itf"></td></tr>
-                <tr><th>品番</th><td id="res-part"></td></tr>
-                <tr><th>ロット混載</th><td id="res-lot"></td></tr>
-                <tr><th>製造ロット</th><td id="res-mfg-lot"></td></tr>
-                <tr><th>製造日時</th><td id="res-mfg-time"></td></tr>
-                <tr><th>ナンバリング</th><td id="res-num"></td></tr>
-                <tr><th>品名</th><td id="res-name"></td></tr>
-            </table>
-        </div>
+    <div id="reader" style="display: none;"></div>
 
-        <!-- バーコード解析結果 -->
-        <div id="barcode-result" class="result-box" style="display: none;">
-            <h3>読み取ったバーコード (ITF)</h3>
-            <p id="res-barcode" class="barcode-text"></p>
-        </div>
+    <div id="camera-controls">
+      <button id="btn-torch" class="btn-torch" type="button" hidden>
+        ライトを点ける
+      </button>
 
-        <button id="btn-reset" class="btn-reset" onclick="resetApp()" style="display: none;">全データをリセット</button>
+      <div id="zoom-area">
+        <label for="zoom">ズーム</label>
+        <input id="zoom" type="range">
+      </div>
     </div>
 
-    <script>
-        document.addEventListener("DOMContentLoaded", () => {
-            const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
-            if (isStandalone) {
-                document.getElementById("install-guide").style.display = "none";
-                document.getElementById("app-container").style.display = "block";
-            } else {
-                document.getElementById("install-guide").style.display = "block";
-                document.getElementById("app-container").style.display = "none";
-            }
-        });
+    <div id="qr-result" class="result-box" style="display: none;">
+      <h3>QRコード情報</h3>
+      <table>
+        <tr><th>ITFコード</th><td id="res-itf"></td></tr>
+        <tr><th>部品分</th><td id="res-part"></td></tr>
+        <tr><th>ロット区分</th><td id="res-lot"></td></tr>
+        <tr><th>製造ロット</th><td id="res-mfg-lot"></td></tr>
+        <tr><th>製造日時</th><td id="res-mfg-time"></td></tr>
+        <tr><th>ナンバリング</th><td id="res-num"></td></tr>
+        <tr><th>製品名</th><td id="res-name"></td></tr>
+      </table>
+    </div>
 
-        function forceAppMode() {
-            document.getElementById("install-guide").style.display = "none";
-            document.getElementById("app-container").style.display = "block";
+    <div id="barcode-result" class="result-box" style="display: none;">
+      <h3>読み取ったバーコード（ITF）</h3>
+      <p id="res-barcode" class="barcode-text"></p>
+    </div>
+
+    <button id="btn-reset" class="btn-reset" onclick="resetApp()" style="display: none;">
+      全データをリセット
+    </button>
+  </div>
+
+  <script>
+    let qrData_ITF = null;
+    let barcodeData_ITF = null;
+    let html5QrCode = null;
+    let currentMode = null;
+    let isScanning = false;
+    let isStarting = false;
+    let cancelRequested = false;
+    let torchEnabled = false;
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const isStandalone =
+        window.navigator.standalone === true ||
+        window.matchMedia("(display-mode: standalone)").matches;
+
+      document.getElementById("install-guide").style.display = isStandalone ? "none" : "block";
+      document.getElementById("app-container").style.display = isStandalone ? "block" : "none";
+    });
+
+    function forceAppMode() {
+      document.getElementById("install-guide").style.display = "none";
+      document.getElementById("app-container").style.display = "block";
+    }
+
+    function vibrate() {
+      if (navigator.vibrate) navigator.vibrate(200);
+    }
+
+    function parseQRCode(text) {
+      const safeSub = (str, start, end) => str.substring(start, end).trim();
+      const rawDateTime = safeSub(text, 24, 36);
+
+      let lot = "";
+      let timeStr = "";
+
+      if (rawDateTime.length === 12) {
+        lot = rawDateTime.substring(0, 6);
+        const hh = Number(rawDateTime.substring(6, 8));
+        const mm = Number(rawDateTime.substring(8, 10));
+        const ss = Number(rawDateTime.substring(10, 12));
+        timeStr = `${hh}時${mm}分${ss}秒`;
+      } else {
+        lot = rawDateTime;
+      }
+
+      return {
+        itf: safeSub(text, 0, 14),
+        partNo: safeSub(text, 14, 22),
+        lotMix: safeSub(text, 22, 24),
+        mfgLot: lot,
+        mfgTime: timeStr,
+        numbering: safeSub(text, 36, 40),
+        productName: safeSub(text, 40, 56)
+      };
+    }
+
+    function isValidQrData(text, parsed) {
+      // QRのデータ仕様が56文字固定の場合は、この条件を有効にしてください。
+      // if (text.length < 56) return false;
+
+      return /^\d{14}$/.test(parsed.itf);
+    }
+
+    function isValidBarcode(text) {
+      // ITF-14以外も扱う場合は、必要な桁数に変更してください。
+      return /^\d{14}$/.test(text);
+    }
+
+    function onScanSuccess(decodedText) {
+      if (!isScanning) return;
+
+      if (currentMode === "qr") {
+        const parsed = parseQRCode(decodedText);
+
+        if (!isValidQrData(decodedText, parsed)) {
+          showStatus("QRコードのデータ形式が想定と異なります。", "ng");
+          return;
         }
 
-        let qrData_ITF = null;
-        let barcodeData_ITF = null;
-        let html5QrCode;
-        let isScanning = false;
-        let currentMode = null;
+        qrData_ITF = parsed.itf;
+        document.getElementById("res-itf").innerText = parsed.itf;
+        document.getElementById("res-part").innerText = parsed.partNo;
+        document.getElementById("res-lot").innerText = parsed.lotMix;
+        document.getElementById("res-mfg-lot").innerText = parsed.mfgLot;
+        document.getElementById("res-mfg-time").innerText = parsed.mfgTime;
+        document.getElementById("res-num").innerText = parsed.numbering;
+        document.getElementById("res-name").innerText = parsed.productName;
+        document.getElementById("qr-result").style.display = "block";
 
-        function vibrate() {
-            if (navigator.vibrate) { navigator.vibrate(200); }
+        const button = document.getElementById("btn-qr");
+        button.classList.add("btn-done");
+        button.innerText = "✅ QR読取完了";
+      }
+
+      if (currentMode === "barcode") {
+        if (!isValidBarcode(decodedText)) {
+          showStatus("ITF-14形式のバーコードではありません。", "ng");
+          return;
         }
 
-        function parseQRCode(text) {
-            const safeSub = (str, start, end) => str.substring(start, end).trim();
-            const rawDateTime = safeSub(text, 24, 36);
-            let lot = "", timeStr = "";
-            if (rawDateTime.length === 12) {
-                lot = rawDateTime.substring(0, 6);
-                const hh = parseInt(rawDateTime.substring(6, 8), 10);
-                const mm = parseInt(rawDateTime.substring(8, 10), 10);
-                const ss = parseInt(rawDateTime.substring(10, 12), 10);
-                timeStr = `${hh}時${mm}分${ss}秒`;
-            } else {
-                lot = rawDateTime;
+        barcodeData_ITF = decodedText;
+        document.getElementById("res-barcode").innerText = barcodeData_ITF;
+        document.getElementById("barcode-result").style.display = "block";
+
+        const button = document.getElementById("btn-barcode");
+        button.classList.add("btn-done");
+        button.innerText = "✅ バーコード読取完了";
+      }
+
+      vibrate();
+      stopScannerAndCheck();
+    }
+
+    function showStatus(message, type = "") {
+      const status = document.getElementById("status");
+      status.innerText = message;
+      status.className = `status-box${type ? ` status-${type}` : ""}`;
+    }
+
+    function checkMatch() {
+      const status = document.getElementById("status");
+
+      if (qrData_ITF && barcodeData_ITF) {
+        if (qrData_ITF === barcodeData_ITF) {
+          status.innerText = "✅ 照合OK：ITFコードが一致しました。";
+          status.className = "status-box status-ok";
+        } else {
+          status.innerText = "❌ 照合NG：ITFコードが一致しません。";
+          status.className = "status-box status-ng";
+        }
+      } else if (qrData_ITF) {
+        status.innerText = "QRコード読取完了。バーコードをスキャンしてください。";
+        status.className = "status-box status-wait";
+      } else if (barcodeData_ITF) {
+        status.innerText = "バーコード読取完了。QRコードをスキャンしてください。";
+        status.className = "status-box status-wait";
+      } else {
+        status.innerText = "読み取る種類を選択してください";
+        status.className = "status-box";
+      }
+
+      if (qrData_ITF || barcodeData_ITF) {
+        document.getElementById("btn-reset").style.display = "block";
+      }
+    }
+
+    async function startScanner(mode) {
+      if (isScanning || isStarting) return;
+
+      currentMode = mode;
+      isStarting = true;
+      cancelRequested = false;
+
+      document.getElementById("btn-qr").style.display = "none";
+      document.getElementById("btn-barcode").style.display = "none";
+      document.getElementById("btn-reset").style.display = "none";
+      document.getElementById("btn-cancel").style.display = "block";
+      document.getElementById("reader").style.display = "block";
+
+      const isQr = mode === "qr";
+      const formats = isQr
+        ? [Html5QrcodeSupportedFormats.QR_CODE]
+        : [Html5QrcodeSupportedFormats.ITF];
+
+      showStatus(
+        isQr
+          ? "QRコードを枠内に大きく写してください"
+          : "バーコードを横長の枠内に写してください",
+        "wait"
+      );
+
+      html5QrCode = new Html5Qrcode("reader", {
+        formatsToSupport: formats
+      });
+
+      const config = {
+        fps: 12,
+        qrbox: isQr
+          ? (viewWidth, viewHeight) => {
+              const edge = Math.floor(Math.min(viewWidth, viewHeight) * 0.9);
+              return { width: edge, height: edge };
             }
-            return {
-                itf: safeSub(text, 0, 14), partNo: safeSub(text, 14, 22), lotMix: safeSub(text, 22, 24),
-                mfgLot: lot, mfgTime: timeStr, numbering: safeSub(text, 36, 40), productName: safeSub(text, 40, 56)
-            };
+          : { width: 360, height: 140 },
+        videoConstraints: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }
+      };
+
+      try {
+        await html5QrCode.start(
+          { facingMode: { ideal: "environment" } },
+          config,
+          onScanSuccess
+        );
+
+        isStarting = false;
+        isScanning = true;
+
+        await setupCameraControls();
+
+        if (cancelRequested) {
+          await stopScannerAndCheck();
+        }
+      } catch (error) {
+        console.error(error);
+        isStarting = false;
+        isScanning = false;
+        showStatus("カメラを起動できませんでした。カメラ権限とHTTPS接続を確認してください。", "ng");
+        restoreUIAfterScan();
+      }
+    }
+
+    async function setupCameraControls() {
+      const torchButton = document.getElementById("btn-torch");
+      const zoomArea = document.getElementById("zoom-area");
+      const zoomInput = document.getElementById("zoom");
+
+      torchButton.hidden = true;
+      zoomArea.style.display = "none";
+      torchEnabled = false;
+
+      try {
+        const capabilities = html5QrCode.getRunningTrackCapabilities();
+
+        if (capabilities.torch) {
+          torchButton.hidden = false;
+          torchButton.innerText = "ライトを点ける";
+
+          torchButton.onclick = async () => {
+            torchEnabled = !torchEnabled;
+
+            try {
+              await html5QrCode.applyVideoConstraints({
+                advanced: [{ torch: torchEnabled }]
+              });
+
+              torchButton.innerText = torchEnabled
+                ? "ライトを消す"
+                : "ライトを点ける";
+            } catch (error) {
+              torchEnabled = !torchEnabled;
+              showStatus("ライトを操作できませんでした。", "ng");
+            }
+          };
         }
 
-        function onScanSuccess(decodedText) {
-            let updated = false;
+        const zoom = capabilities.zoom;
 
-            if (currentMode === 'qr') {
-                const parsed = parseQRCode(decodedText);
-                qrData_ITF = parsed.itf;
-                document.getElementById("res-itf").innerText = parsed.itf;
-                document.getElementById("res-part").innerText = parsed.partNo;
-                document.getElementById("res-lot").innerText = parsed.lotMix;
-                document.getElementById("res-mfg-lot").innerText = parsed.mfgLot;
-                document.getElementById("res-mfg-time").innerText = parsed.mfgTime;
-                document.getElementById("res-num").innerText = parsed.numbering;
-                document.getElementById("res-name").innerText = parsed.productName;
-                document.getElementById("qr-result").style.display = "block";
-                document.getElementById("btn-qr").classList.add("btn-done");
-                document.getElementById("btn-qr").innerText = "✅ QR読取完了";
-                updated = true;
-            } 
-            else if (currentMode === 'barcode') {
-                barcodeData_ITF = decodedText;
-                document.getElementById("res-barcode").innerText = barcodeData_ITF;
-                document.getElementById("barcode-result").style.display = "block";
-                document.getElementById("btn-barcode").classList.add("btn-done");
-                document.getElementById("btn-barcode").innerText = "✅ バーコード読取完了";
-                updated = true;
-            }
+        if (
+          zoom &&
+          Number.isFinite(zoom.min) &&
+          Number.isFinite(zoom.max)
+        ) {
+          zoomArea.style.display = "block";
+          zoomInput.min = zoom.min;
+          zoomInput.max = zoom.max;
+          zoomInput.step = zoom.step || 0.1;
+          zoomInput.value = Math.min(Math.max(1, zoom.min), zoom.max);
 
-            if (updated) {
-                vibrate();
-                stopScannerAndCheck();
+          zoomInput.oninput = async () => {
+            try {
+              await html5QrCode.applyVideoConstraints({
+                advanced: [{ zoom: Number(zoomInput.value) }]
+              });
+            } catch (error) {
+              console.warn("ズーム変更失敗", error);
             }
+          };
+        }
+      } catch (error) {
+        // 非対応端末では操作UIを出さず、通常のスキャンを継続する
+        console.warn("カメラ制御情報を取得できませんでした。", error);
+      }
+    }
+
+    async function stopScannerAndCheck() {
+      if (isStarting) {
+        cancelRequested = true;
+        return;
+      }
+
+      if (!isScanning || !html5QrCode) {
+        restoreUIAfterScan();
+        checkMatch();
+        return;
+      }
+
+      isScanning = false;
+
+      try {
+        await html5QrCode.stop();
+      } catch (error) {
+        console.warn("カメラ停止時のエラー", error);
+      } finally {
+        try {
+          html5QrCode.clear();
+        } catch (_) {
+          // 既にクリア済みの場合は何もしない
         }
 
-        function checkMatch() {
-            const statusEl = document.getElementById("status");
-            if (qrData_ITF && barcodeData_ITF) {
-                if (qrData_ITF === barcodeData_ITF) {
-                    statusEl.innerText = "✅ 照合OK：ITFコードが一致しました！";
-                    statusEl.className = "status-box status-ok";
-                } else {
-                    statusEl.innerText = "❌ 照合NG：ITFコードが不一致です。";
-                    statusEl.className = "status-box status-ng";
-                }
-            } else if (qrData_ITF) {
-                statusEl.innerText = "QRコード読取済。バーコードをスキャンしてください。";
-                statusEl.className = "status-box status-wait";
-            } else if (barcodeData_ITF) {
-                statusEl.innerText = "バーコード読取済。QRコードをスキャンしてください。";
-                statusEl.className = "status-box status-wait";
-            } else {
-                statusEl.innerText = "読み取る項目を選択してください";
-                statusEl.className = "status-box";
-            }
-            
-            if (qrData_ITF || barcodeData_ITF) {
-                document.getElementById("btn-reset").style.display = "block";
-            }
-        }
+        html5QrCode = null;
+        restoreUIAfterScan();
+        checkMatch();
+      }
+    }
 
-        function startScanner(mode) {
-            if(isScanning) return;
-            currentMode = mode;
-            
-            document.getElementById("btn-qr").style.display = "none";
-            document.getElementById("btn-barcode").style.display = "none";
-            document.getElementById("btn-reset").style.display = "none";
-            document.getElementById("btn-cancel").style.display = "block";
-            document.getElementById("reader").style.display = "block";
+    function cancelScanner() {
+      stopScannerAndCheck();
+    }
 
-            let formats, boxSize, guideText;
-            if (mode === 'qr') {
-                formats = [Html5QrcodeSupportedFormats.QR_CODE];
-                boxSize = { width: 540, height: 540 };
-                guideText = "QRコードを枠内に映してください";
-            } else {
-                formats = [Html5QrcodeSupportedFormats.ITF];
-                boxSize = { width: 300, height: 100 };
-                guideText = "バーコードを横長の枠内に映してください";
-            }
+    function restoreUIAfterScan() {
+      document.getElementById("reader").style.display = "none";
+      document.getElementById("btn-cancel").style.display = "none";
+      document.getElementById("btn-qr").style.display = "block";
+      document.getElementById("btn-barcode").style.display = "block";
+      document.getElementById("btn-torch").hidden = true;
+      document.getElementById("zoom-area").style.display = "none";
+    }
 
-            document.getElementById("status").innerText = guideText;
-            document.getElementById("status").className = "status-box status-wait";
+    function resetApp() {
+      qrData_ITF = null;
+      barcodeData_ITF = null;
+      currentMode = null;
 
-            html5QrCode = new Html5Qrcode("reader", { formatsToSupport: formats });
-            
-            const config = { fps: 15, qrbox: boxSize };
-            const cameraConfig = { facingMode: "environment" };
+      document.getElementById("qr-result").style.display = "none";
+      document.getElementById("barcode-result").style.display = "none";
 
-            html5QrCode.start(cameraConfig, config, onScanSuccess)
-            .then(() => { isScanning = true; })
-            .catch(err => {
-                document.getElementById("status").innerText = "カメラ起動に失敗しました。";
-                document.getElementById("status").className = "status-box status-ng";
-            });
-        }
+      const btnQr = document.getElementById("btn-qr");
+      btnQr.classList.remove("btn-done");
+      btnQr.innerText = "QRコードをスキャン";
 
-        function stopScannerAndCheck() {
-            if (html5QrCode && isScanning) {
-                html5QrCode.stop().then(() => {
-                    isScanning = false;
-                    restoreUIAfterScan();
-                    checkMatch();
-                });
-            }
-        }
+      const btnBarcode = document.getElementById("btn-barcode");
+      btnBarcode.classList.remove("btn-done");
+      btnBarcode.innerText = "バーコードをスキャン";
 
-        function cancelScanner() {
-             if (html5QrCode && isScanning) {
-                html5QrCode.stop().then(() => {
-                    isScanning = false;
-                    restoreUIAfterScan();
-                    checkMatch();
-                });
-            }
-        }
+      document.getElementById("btn-reset").style.display = "none";
 
-        function restoreUIAfterScan() {
-            document.getElementById("reader").style.display = "none";
-            document.getElementById("btn-cancel").style.display = "none";
-            document.getElementById("btn-qr").style.display = "block";
-            document.getElementById("btn-barcode").style.display = "block";
-        }
-
-        function resetApp() {
-            qrData_ITF = null;
-            barcodeData_ITF = null;
-            currentMode = null;
-            
-            document.getElementById("qr-result").style.display = "none";
-            document.getElementById("barcode-result").style.display = "none";
-            
-            const btnQr = document.getElementById("btn-qr");
-            btnQr.classList.remove("btn-done");
-            btnQr.innerText = "QRコードをスキャン";
-            
-            const btnBarcode = document.getElementById("btn-barcode");
-            btnBarcode.classList.remove("btn-done");
-            btnBarcode.innerText = "バーコードをスキャン";
-
-            document.getElementById("btn-reset").style.display = "none";
-            
-            if (isScanning) {
-                cancelScanner();
-            } else {
-                checkMatch();
-            }
-        }
-    </script>
+      if (isScanning || isStarting) {
+        cancelScanner();
+      } else {
+        checkMatch();
+      }
+    }
+  </script>
 </body>
 </html>
