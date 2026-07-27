@@ -248,27 +248,20 @@
 
         // カメラ起動
         function startScanner() {
-            // 修正点1: formatsToSupport は new Html5Qrcode の第2引数に設定します
-            html5QrCode = new Html5Qrcode("reader", {
-                formatsToSupport: [
-                    Html5QrcodeSupportedFormats.QR_CODE,
-                    Html5QrcodeSupportedFormats.ITF
-                ]
-            });
+            // 最初に起動成功した最も安定している初期化に戻します
+            html5QrCode = new Html5Qrcode("reader");
             
+            // 変更点: qrbox（読み取り枠）の指定をあえて削除します。
+            // 枠をなくして画面全体をスキャン対象にすることで、
+            // 横に長いITFバーコードが見切れるのを防ぎ、細かいQRも合わせやすくなります。
             const config = { 
-                fps: 10, 
-                qrbox: { width: 250, height: 250 }
+                fps: 10
             };
 
-            // 修正点2: iOS Safariでエラーになる advanced (オートフォーカス指定) を削除し、高解像度指定だけ残します
-            const videoConstraints = {
-                facingMode: "environment",
-                width: { ideal: 1920 },
-                height: { ideal: 1080 }
-            };
+            // 最初に起動成功した最も安全なカメラ指定（背面カメラ）
+            const cameraConfig = { facingMode: "environment" };
 
-            html5QrCode.start(videoConstraints, config, onScanSuccess)
+            html5QrCode.start(cameraConfig, config, onScanSuccess)
             .then(() => {
                 resetApp();
             })
