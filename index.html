@@ -608,29 +608,39 @@
       const qr = parseQRCode(qrResult.text);
       const worker = await getOcrWorker();
 
-      // 品番の位置は決め打ちせず、写真全体から「英字1文字＋数字7文字」を探す。
-      const partText = await recognizeVariants(worker, [
-        upscaleCanvas(canvas, 1.25),
-        prepareContrastForOcr(canvas, false, 1.25)
-      ], "11");
-      const partNo = pickCode(partText, /[A-Z][0-9]{7}/g, qr.partNo);
+      // 品番はQRより上側だけを対象にする。位置は固定せず、背景の明暗を両方試す。
+      const hasOriginalQrPosition = qrResult.method.startsWith("全体画像");
+      const partRegion = hasOriginalQrPosition
+        ? cropAboveQr(canvas, qrResult.position)
+        : canvas;
+      const partNo = await recognizeCodeWithFallback(worker, [
+        prepareContrastForOcr(partRegion, false, 1),
+        prepareContrastForOcr(partRegion, true, 1)
+      ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
 
-      // 製造ロットとナンバリングは、検出されたQRの左側の黒ラベルをOCRする。
-      // QRが領域切出しで読めた場合は座標が元写真と一致しないため、全体OCRを予備として使う。
-      const labelCanvas = qrResult.method.startsWith("全体画像")
+      // 黒ラベルはQRの左側を切り出し、製造ロットとナンバリングを別々の1行として読む。
+      const labelCanvas = hasOriginalQrPosition
         ? cropLeftOfQr(canvas, qrResult.position)
         : null;
-      const labelText = labelCanvas
-        ? await recognizeVariants(worker, [
-          upscaleCanvas(labelCanvas, 3),
-          prepareContrastForOcr(labelCanvas, true)
-        ], "6")
-        : partText;
+      if (!labelCanvas) {
+        return { partNo, mfgLot: "", numbering: "" };
+      }
+
+      const lotRegion = cropCanvasFraction(labelCanvas, 0, 0, 1, 0.58);
+      const numberRegion = cropCanvasFraction(labelCanvas, 0, 0.38, 1, 0.62);
+      const mfgLot = await recognizeCodeWithFallback(worker, [
+        prepareContrastForOcr(lotRegion, true, 2),
+        upscaleCanvas(lotRegion, 2)
+      ], "7", "lot", qr.mfgLot, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+      const numbering = await recognizeCodeWithFallback(worker, [
+        prepareContrastForOcr(numberRegion, true, 2),
+        upscaleCanvas(numberRegion, 2)
+      ], "7", "number", qr.numbering, "0123456789");
 
       return {
         partNo,
-        mfgLot: pickCode(labelText, /[A-Z]{2}[A-Z0-9]{4}/g, qr.mfgLot),
-        numbering: pickCode(labelText, /[0-9]{4}/g, qr.numbering)
+        mfgLot,
+        numbering
       };
     }
 
@@ -652,28 +662,61 @@
       return ocrWorker;
     }
 
-    async function recognizeAlphaNumeric(worker, canvas, pageSegMode) {
+    async function recognizeAlphaNumeric(worker, canvas, pageSegMode, whitelist) {
       const { data } = await worker.recognize(canvas, {
         tessedit_pageseg_mode: pageSegMode,
-        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        tessedit_char_whitelist: whitelist
       });
       return String(data.text || "").toUpperCase().replace(/[^A-Z0-9]/g, " ");
     }
 
-    async function recognizeVariants(worker, canvases, pageSegMode) {
-      const texts = [];
+    async function recognizeCodeWithFallback(worker, canvases, pageSegMode, type, expected, whitelist) {
+      let fallback = "";
       for (const canvas of canvases) {
-        texts.push(await recognizeAlphaNumeric(worker, canvas, pageSegMode));
+        const text = await recognizeAlphaNumeric(worker, canvas, pageSegMode, whitelist);
+        const candidate = pickCode(text, type, expected);
+        if (candidate === expected) return expected;
+        if (!fallback && candidate) fallback = candidate;
       }
-      return texts.join(" ");
+      return fallback;
     }
 
-    function pickCode(ocrText, pattern, expectedValue) {
-      const candidates = ocrText.match(pattern) || [];
+    function pickCode(ocrText, type, expectedValue) {
+      const tokens = String(ocrText).match(/[A-Z0-9]+/g) || [];
+      const joinedTokens = [...tokens];
+      for (let i = 0; i < tokens.length - 1; i += 1) {
+        if ((tokens[i] + tokens[i + 1]).length <= 8) {
+          joinedTokens.push(tokens[i] + tokens[i + 1]);
+        }
+      }
+      const candidates = [];
+      for (const token of joinedTokens) {
+        const normalized = normalizeOcrToken(token, type);
+        if (normalized) candidates.push(normalized);
+      }
       return candidates.includes(expectedValue) ? expectedValue : (candidates[0] || "");
     }
 
-    function cropLeftOfQr(canvas, position) {
+    function normalizeOcrToken(token, type) {
+      const digitMap = { O: "0", Q: "0", I: "1", L: "1", Z: "2", S: "5", G: "6", T: "7", B: "8" };
+      const toDigits = value => [...value].map(char => digitMap[char] || char).join("");
+
+      if (type === "part" && token.length === 8 && /^[A-Z]/.test(token)) {
+        const value = token[0] + toDigits(token.slice(1));
+        return /^[A-Z][0-9]{7}$/.test(value) ? value : "";
+      }
+      if (type === "lot" && token.length === 6 && /^[A-Z]{2}/.test(token)) {
+        const value = token.slice(0, 2) + toDigits(token.slice(2));
+        return /^[A-Z]{2}[0-9]{4}$/.test(value) ? value : "";
+      }
+      if (type === "number" && token.length === 4) {
+        const value = toDigits(token);
+        return /^[0-9]{4}$/.test(value) ? value : "";
+      }
+      return "";
+    }
+
+    function getPositionBounds(position) {
       if (!position) return null;
       const points = [position.topLeft, position.topRight, position.bottomLeft, position.bottomRight]
         .filter(Boolean);
@@ -681,10 +724,27 @@
 
       const xs = points.map(point => point.x);
       const ys = points.map(point => point.y);
-      const minX = Math.min(...xs);
-      const maxX = Math.max(...xs);
-      const minY = Math.min(...ys);
-      const maxY = Math.max(...ys);
+      return {
+        minX: Math.min(...xs),
+        maxX: Math.max(...xs),
+        minY: Math.min(...ys),
+        maxY: Math.max(...ys)
+      };
+    }
+
+    function cropAboveQr(canvas, position) {
+      const bounds = getPositionBounds(position);
+      if (!bounds) return canvas;
+      const qrSize = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+      const bottom = Math.max(1, Math.floor(bounds.minY - qrSize * 0.12));
+      const top = Math.max(0, Math.floor(bottom - canvas.height * 0.62));
+      return cropCanvasRect(canvas, 0, top, canvas.width, bottom - top);
+    }
+
+    function cropLeftOfQr(canvas, position) {
+      const bounds = getPositionBounds(position);
+      if (!bounds) return null;
+      const { minX, maxX, minY, maxY } = bounds;
       const qrSize = Math.max(maxX - minX, maxY - minY);
       const left = Math.max(0, Math.floor(minX - qrSize * 1.9));
       const top = Math.max(0, Math.floor(minY - qrSize * 0.12));
@@ -692,9 +752,23 @@
       const bottom = Math.min(canvas.height, Math.ceil(maxY + qrSize * 0.12));
 
       if (right <= left || bottom <= top) return null;
+      return cropCanvasRect(canvas, left, top, right - left, bottom - top);
+    }
+
+    function cropCanvasFraction(canvas, x, y, width, height) {
+      return cropCanvasRect(
+        canvas,
+        Math.floor(canvas.width * x),
+        Math.floor(canvas.height * y),
+        Math.ceil(canvas.width * width),
+        Math.ceil(canvas.height * height)
+      );
+    }
+
+    function cropCanvasRect(canvas, left, top, width, height) {
       const result = document.createElement("canvas");
-      result.width = right - left;
-      result.height = bottom - top;
+      result.width = Math.max(1, Math.min(canvas.width - left, width));
+      result.height = Math.max(1, Math.min(canvas.height - top, height));
       result.getContext("2d", { willReadFrequently: true })
         .drawImage(canvas, left, top, result.width, result.height, 0, 0, result.width, result.height);
       return result;
