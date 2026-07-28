@@ -363,14 +363,10 @@
     });
 
     resetButton.addEventListener("click", () => {
-      qrData = null;
-      barcodeData = null;
+      clearResults();
       sourceCanvas = null;
       preview.removeAttribute("src");
       previewWrap.style.display = "none";
-      document.getElementById("qr-result").classList.remove("visible");
-      document.getElementById("barcode-result").classList.remove("visible");
-      resetButton.hidden = true;
       setStatus("");
     });
 
@@ -613,7 +609,10 @@
       const worker = await getOcrWorker();
 
       // 品番の位置は決め打ちせず、写真全体から「英字1文字＋数字7文字」を探す。
-      const partText = await recognizeAlphaNumeric(worker, upscaleCanvas(canvas, 1.25), "11");
+      const partText = await recognizeVariants(worker, [
+        upscaleCanvas(canvas, 1.25),
+        prepareContrastForOcr(canvas, false, 1.25)
+      ], "11");
       const partNo = pickCode(partText, /[A-Z][0-9]{7}/g, qr.partNo);
 
       // 製造ロットとナンバリングは、検出されたQRの左側の黒ラベルをOCRする。
@@ -622,7 +621,10 @@
         ? cropLeftOfQr(canvas, qrResult.position)
         : null;
       const labelText = labelCanvas
-        ? await recognizeAlphaNumeric(worker, prepareDarkLabelForOcr(labelCanvas), "6")
+        ? await recognizeVariants(worker, [
+          upscaleCanvas(labelCanvas, 3),
+          prepareContrastForOcr(labelCanvas, true)
+        ], "6")
         : partText;
 
       return {
@@ -658,6 +660,14 @@
       return String(data.text || "").toUpperCase().replace(/[^A-Z0-9]/g, " ");
     }
 
+    async function recognizeVariants(worker, canvases, pageSegMode) {
+      const texts = [];
+      for (const canvas of canvases) {
+        texts.push(await recognizeAlphaNumeric(worker, canvas, pageSegMode));
+      }
+      return texts.join(" ");
+    }
+
     function pickCode(ocrText, pattern, expectedValue) {
       const candidates = ocrText.match(pattern) || [];
       return candidates.includes(expectedValue) ? expectedValue : (candidates[0] || "");
@@ -676,7 +686,7 @@
       const minY = Math.min(...ys);
       const maxY = Math.max(...ys);
       const qrSize = Math.max(maxX - minX, maxY - minY);
-      const left = Math.max(0, Math.floor(minX - qrSize * 1.45));
+      const left = Math.max(0, Math.floor(minX - qrSize * 1.9));
       const top = Math.max(0, Math.floor(minY - qrSize * 0.12));
       const right = Math.min(canvas.width, Math.ceil(minX + qrSize * 0.03));
       const bottom = Math.min(canvas.height, Math.ceil(maxY + qrSize * 0.12));
@@ -700,17 +710,17 @@
       return output;
     }
 
-    function prepareDarkLabelForOcr(canvas) {
-      const output = upscaleCanvas(canvas, 3);
+    function prepareContrastForOcr(canvas, invert, scale = 3) {
+      const output = upscaleCanvas(canvas, scale);
       const context = output.getContext("2d", { willReadFrequently: true });
       const image = context.getImageData(0, 0, output.width, output.height);
       const data = image.data;
 
-      // 黒ラベルを白、淡い文字を黒へ反転し、OCRしやすいコントラストにする。
+      // 段ボール地の濃淡を抑え、黒ラベルの場合は白背景・黒文字へ反転する。
       for (let i = 0; i < data.length; i += 4) {
         const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        const inverted = clamp(Math.round(255 - gray), 0, 255);
-        const enhanced = inverted > 125 ? 255 : 0;
+        const source = invert ? 255 - gray : gray;
+        const enhanced = clamp(Math.round(128 + (source - 128) * 2.15), 0, 255);
         data[i] = enhanced;
         data[i + 1] = enhanced;
         data[i + 2] = enhanced;
