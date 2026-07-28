@@ -107,13 +107,6 @@
       font-size: 1rem;
     }
 
-    .hero-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-top: 26px;
-    }
-
     .button {
       display: inline-flex;
       min-height: 44px;
@@ -138,25 +131,6 @@
       width: min(1080px, calc(100% - 36px));
       margin: 0 auto;
       padding: 34px 0 72px;
-    }
-
-    .quick-nav {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 12px;
-      margin-bottom: 28px;
-    }
-
-    .quick-nav a {
-      padding: 15px 16px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: var(--paper);
-      color: var(--navy);
-      font-weight: 800;
-      text-align: center;
-      text-decoration: none;
-      box-shadow: 0 5px 18px rgba(23,34,59,.05);
     }
 
     .section {
@@ -259,6 +233,7 @@
     }
 
     .photo-card {
+      position: relative;
       overflow: hidden;
       border: 1px solid var(--line);
       border-radius: 20px;
@@ -267,6 +242,33 @@
     }
 
     .photo-card img { width: 100%; }
+
+    .focus-mark {
+      position: absolute;
+      border: clamp(3px, .55vw, 7px) solid #ef2929;
+      border-radius: 50%;
+      filter: drop-shadow(0 2px 2px rgba(0, 0, 0, .4));
+      pointer-events: none;
+    }
+
+    .focus-mark span {
+      position: absolute;
+      top: -1.85em;
+      left: 50%;
+      translate: -50% 0;
+      padding: .28em .66em;
+      border-radius: 999px;
+      background: #ef2929;
+      color: #fff;
+      font-size: clamp(.7rem, 1.5vw, 1rem);
+      font-weight: 900;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .focus-part { left: .5%; top: 30.5%; width: 34%; height: 12%; }
+    .focus-qr { left: 61%; top: 56%; width: 29%; height: 20%; }
+    .focus-itf { left: 35%; top: 80%; width: 60%; height: 13%; }
 
     .requirements {
       display: grid;
@@ -385,7 +387,6 @@
       .brand { align-items: flex-start; }
       .brand-icon { width: 72px; height: 72px; border-radius: 18px; }
       .hero-copy { font-size: .92rem; }
-      .quick-nav { grid-template-columns: 1fr; gap: 8px; }
       .two-column, .photo-layout, .result-grid { grid-template-columns: 1fr; }
       .legend, .caution-grid { grid-template-columns: 1fr; }
       .section { border-radius: 18px; }
@@ -395,7 +396,7 @@
     @media print {
       body { background: #fff; }
       .hero { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-      .quick-nav, .hero-actions, .footer { display: none; }
+      .footer { display: none; }
       .page { width: 100%; padding: 12px 0; }
       .section { break-inside: avoid; box-shadow: none; }
       .result-scroll { max-height: none; overflow: visible; }
@@ -413,20 +414,11 @@
           <h1>コード照合アプリ<br>取扱説明書</h1>
         </div>
       </div>
-      <p class="hero-copy">箱ラベルの写真から、QRコード・ITFバーコード・印字文字を読み取り、内容が一致しているか確認するアプリです。アプリはホーム画面の「コード照合」アイコンから起動してください。</p>
-      <div class="hero-actions">
-        <a class="button primary" href="#start">使い方を見る</a>
-      </div>
+      <p class="hero-copy">箱ラベルの写真から、QRコード・ITFバーコード・印字文字を読み取り、内容が一致しているか確認するアプリです。</p>
     </div>
   </header>
 
   <main class="page">
-    <nav class="quick-nav" aria-label="ページ内メニュー">
-      <a href="#start">1. 写真を選ぶ</a>
-      <a href="#photo">2. 撮影のポイント</a>
-      <a href="#result">3. 判定を確認</a>
-    </nav>
-
     <section id="start" class="section">
       <div class="section-head">
         <span class="step-number">1</span>
@@ -437,8 +429,8 @@
           <img src="manual-assets/app-start.jpg" alt="アプリ起動時の写真選択画面">
         </figure>
         <div>
-          <h3>ホーム画面のアイコンから起動</h3>
-          <p>ホーム画面の「コード照合」アイコンをタップしてアプリを開き、「写真を選択」を押します。表示されたメニューから、状況に合わせて撮影方法を選びます。</p>
+          <h3>「写真を選択」をタップ</h3>
+          <p>表示されたメニューから、状況に合わせて撮影方法を選びます。</p>
           <ul class="instruction-list">
             <li><strong>写真を撮る：</strong>その場で箱を撮影します。</li>
             <li><strong>写真ライブラリ：</strong>すでに撮影した写真を選びます。</li>
@@ -456,6 +448,9 @@
       <div class="photo-layout">
         <figure class="photo-card">
           <img src="manual-assets/photo-example.jpg" alt="品番、QRコード、製造ロット、ナンバリング、ITFバーコードが写った撮影例">
+          <div class="focus-mark focus-part" aria-hidden="true"><span>品番</span></div>
+          <div class="focus-mark focus-qr" aria-hidden="true"><span>QRコード</span></div>
+          <div class="focus-mark focus-itf" aria-hidden="true"><span>ITFバーコード</span></div>
         </figure>
         <div>
           <div class="requirements">
@@ -545,9 +540,6 @@
       </div>
     </section>
 
-    <footer class="footer">
-      <p>次の照合を始めるときは、ホーム画面の「コード照合」アイコンからアプリを開いてください。</p>
-    </footer>
   </main>
 </body>
 </html>
