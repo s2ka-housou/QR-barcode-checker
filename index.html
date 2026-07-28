@@ -13,6 +13,8 @@
 
   <!-- 画像ファイルから QR / ITF を解析する WebAssembly ライブラリ -->
   <script src="https://cdn.jsdelivr.net/npm/zxing-wasm@2.2.1/dist/iife/reader/index.js"></script>
+  <!-- 英数字を画像から読み取るOCRライブラリ -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 
   <style>
     :root {
@@ -157,6 +159,12 @@
     th { width: 36%; color: #64748b; font-size: .85rem; font-weight: 600; }
     td { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 700; overflow-wrap: anywhere; }
 
+    .match-table th { width: auto; text-align: center; }
+    .match-table td { font-size: .82rem; text-align: center; }
+    .match-ok { color: #15803d; }
+    .match-ng { color: #b91c1c; }
+    .match-pending { color: #a16207; }
+
     .barcode {
       margin: 0;
       color: var(--navy);
@@ -284,12 +292,22 @@
       <h2>QRコード情報</h2>
       <table>
         <tr><th>ITFコード</th><td id="res-itf"></td></tr>
-        <tr><th>部品分</th><td id="res-part"></td></tr>
-        <tr><th>ロット区分</th><td id="res-lot"></td></tr>
+        <tr><th>品番</th><td id="res-part"></td></tr>
+        <tr><th>ロット混載</th><td id="res-lot"></td></tr>
         <tr><th>製造ロット</th><td id="res-mfg-lot"></td></tr>
-        <tr><th>製造日時</th><td id="res-mfg-time"></td></tr>
+        <tr><th>製造時間</th><td id="res-mfg-time"></td></tr>
         <tr><th>ナンバリング</th><td id="res-num"></td></tr>
-        <tr><th>製品名</th><td id="res-name"></td></tr>
+        <tr><th>品名</th><td id="res-name"></td></tr>
+      </table>
+    </section>
+
+    <section id="ocr-result" class="card result-card">
+      <h2>OCR照合</h2>
+      <table class="match-table">
+        <tr><th>項目</th><th>QR</th><th>OCR</th><th>判定</th></tr>
+        <tr><th>品番</th><td id="match-part-qr"></td><td id="match-part-ocr"></td><td id="match-part-status"></td></tr>
+        <tr><th>製造ロット</th><td id="match-lot-qr"></td><td id="match-lot-ocr"></td><td id="match-lot-status"></td></tr>
+        <tr><th>ナンバリング</th><td id="match-num-qr"></td><td id="match-num-ocr"></td><td id="match-num-status"></td></tr>
       </table>
     </section>
 
@@ -319,6 +337,8 @@
     let sourceCanvas = null;
     let qrData = null;
     let barcodeData = null;
+    let ocrData = null;
+    let ocrWorker = null;
 
     function isStandaloneApp() {
       return window.navigator.standalone === true ||
@@ -383,6 +403,16 @@
           const itfImage = cropByLayout(sourceCanvas, LAYOUT.itf);
           const itfResults = await scanVariants(itfImage, ["ITF"], "ITF領域");
           acceptResults(itfResults);
+        }
+
+        if (qrData) {
+          try {
+            setBusy("OCRで品番・製造ロット・ナンバリングを確認しています…");
+            ocrData = await readOcrValues(sourceCanvas, qrData);
+          } catch (error) {
+            console.warn("OCRを実行できませんでした。", error);
+            ocrData = null;
+          }
         }
 
         renderResults();
@@ -578,6 +608,117 @@
       return String(value).replace(/\s/g, "");
     }
 
+    async function readOcrValues(canvas, qrResult) {
+      const qr = parseQRCode(qrResult.text);
+      const worker = await getOcrWorker();
+
+      // 品番の位置は決め打ちせず、写真全体から「英字1文字＋数字7文字」を探す。
+      const partText = await recognizeAlphaNumeric(worker, upscaleCanvas(canvas, 1.25), "11");
+      const partNo = pickCode(partText, /[A-Z][0-9]{7}/g, qr.partNo);
+
+      // 製造ロットとナンバリングは、検出されたQRの左側の黒ラベルをOCRする。
+      // QRが領域切出しで読めた場合は座標が元写真と一致しないため、全体OCRを予備として使う。
+      const labelCanvas = qrResult.method.startsWith("全体画像")
+        ? cropLeftOfQr(canvas, qrResult.position)
+        : null;
+      const labelText = labelCanvas
+        ? await recognizeAlphaNumeric(worker, prepareDarkLabelForOcr(labelCanvas), "6")
+        : partText;
+
+      return {
+        partNo,
+        mfgLot: pickCode(labelText, /[A-Z]{2}[A-Z0-9]{4}/g, qr.mfgLot),
+        numbering: pickCode(labelText, /[0-9]{4}/g, qr.numbering)
+      };
+    }
+
+    async function getOcrWorker() {
+      if (ocrWorker) return ocrWorker;
+      if (!window.Tesseract) throw new Error("OCRライブラリを読み込めませんでした。");
+
+      ocrWorker = await window.Tesseract.createWorker("eng", 1, {
+        logger: message => {
+          if (message.status === "recognizing text") {
+            setBusy(`OCRで文字を確認しています… ${Math.round(message.progress * 100)}%`);
+          }
+        }
+      });
+      await ocrWorker.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        preserve_interword_spaces: "0"
+      });
+      return ocrWorker;
+    }
+
+    async function recognizeAlphaNumeric(worker, canvas, pageSegMode) {
+      const { data } = await worker.recognize(canvas, {
+        tessedit_pageseg_mode: pageSegMode,
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+      });
+      return String(data.text || "").toUpperCase().replace(/[^A-Z0-9]/g, " ");
+    }
+
+    function pickCode(ocrText, pattern, expectedValue) {
+      const candidates = ocrText.match(pattern) || [];
+      return candidates.includes(expectedValue) ? expectedValue : (candidates[0] || "");
+    }
+
+    function cropLeftOfQr(canvas, position) {
+      if (!position) return null;
+      const points = [position.topLeft, position.topRight, position.bottomLeft, position.bottomRight]
+        .filter(Boolean);
+      if (points.length !== 4) return null;
+
+      const xs = points.map(point => point.x);
+      const ys = points.map(point => point.y);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const qrSize = Math.max(maxX - minX, maxY - minY);
+      const left = Math.max(0, Math.floor(minX - qrSize * 1.45));
+      const top = Math.max(0, Math.floor(minY - qrSize * 0.12));
+      const right = Math.min(canvas.width, Math.ceil(minX + qrSize * 0.03));
+      const bottom = Math.min(canvas.height, Math.ceil(maxY + qrSize * 0.12));
+
+      if (right <= left || bottom <= top) return null;
+      const result = document.createElement("canvas");
+      result.width = right - left;
+      result.height = bottom - top;
+      result.getContext("2d", { willReadFrequently: true })
+        .drawImage(canvas, left, top, result.width, result.height, 0, 0, result.width, result.height);
+      return result;
+    }
+
+    function upscaleCanvas(canvas, scale) {
+      const output = document.createElement("canvas");
+      output.width = Math.round(canvas.width * scale);
+      output.height = Math.round(canvas.height * scale);
+      const context = output.getContext("2d", { willReadFrequently: true });
+      context.imageSmoothingEnabled = true;
+      context.drawImage(canvas, 0, 0, output.width, output.height);
+      return output;
+    }
+
+    function prepareDarkLabelForOcr(canvas) {
+      const output = upscaleCanvas(canvas, 3);
+      const context = output.getContext("2d", { willReadFrequently: true });
+      const image = context.getImageData(0, 0, output.width, output.height);
+      const data = image.data;
+
+      // 黒ラベルを白、淡い文字を黒へ反転し、OCRしやすいコントラストにする。
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        const inverted = clamp(Math.round(255 - gray), 0, 255);
+        const enhanced = inverted > 125 ? 255 : 0;
+        data[i] = enhanced;
+        data[i + 1] = enhanced;
+        data[i + 2] = enhanced;
+      }
+      context.putImageData(image, 0, 0);
+      return output;
+    }
+
     function parseQRCode(text) {
       const value = String(text).trim();
       const part = (start, end) => value.substring(start, end).trim();
@@ -623,6 +764,7 @@
         setText("res-num", parsed.numbering);
         setText("res-name", parsed.productName);
         qrResultBox.classList.add("visible");
+        renderOcrComparison(parsed);
       }
 
       if (barcodeData) {
@@ -635,10 +777,13 @@
       if (qrData && barcodeData) {
         const qrItf = parseQRCode(qrData.text).itf;
         const barcodeItf = normalizeBarcode(barcodeData.text);
-        if (qrItf === barcodeItf) {
-          setStatus("照合OK：QRコードとITFバーコードが一致しました。", "ok");
-        } else {
+        const ocrMatches = ocrData ? isOcrMatchComplete(parseQRCode(qrData.text)) : false;
+        if (qrItf !== barcodeItf) {
           setStatus("照合NG：QRコードとITFバーコードが一致しません。", "ng");
+        } else if (ocrMatches) {
+          setStatus("照合OK：QR・ITFバーコード・OCRのすべてが一致しました。", "ok");
+        } else {
+          setStatus("照合NG：OCRで読み取った値がQRコード情報と一致しないか、読み取れませんでした。", "ng");
         }
       } else if (!qrData && !barcodeData) {
         setStatus("QRコードとITFバーコードを読み取れませんでした。ラベル全体が明るく鮮明に写った写真で試してください。", "ng");
@@ -649,11 +794,37 @@
       }
     }
 
+    function renderOcrComparison(qr) {
+      if (!ocrData) return;
+      document.getElementById("ocr-result").classList.add("visible");
+      renderMatchRow("part", qr.partNo, ocrData.partNo);
+      renderMatchRow("lot", qr.mfgLot, ocrData.mfgLot);
+      renderMatchRow("num", qr.numbering, ocrData.numbering);
+    }
+
+    function renderMatchRow(key, qrValue, ocrValue) {
+      setText(`match-${key}-qr`, qrValue);
+      setText(`match-${key}-ocr`, ocrValue);
+      const status = document.getElementById(`match-${key}-status`);
+      const matches = Boolean(ocrValue) && qrValue === ocrValue;
+      status.textContent = matches ? "OK" : (ocrValue ? "NG" : "未読");
+      status.className = matches ? "match-ok" : (ocrValue ? "match-ng" : "match-pending");
+    }
+
+    function isOcrMatchComplete(qr) {
+      return Boolean(ocrData.partNo) && Boolean(ocrData.mfgLot) && Boolean(ocrData.numbering) &&
+        qr.partNo === ocrData.partNo &&
+        qr.mfgLot === ocrData.mfgLot &&
+        qr.numbering === ocrData.numbering;
+    }
+
     function clearResults() {
       qrData = null;
       barcodeData = null;
+      ocrData = null;
       document.getElementById("qr-result").classList.remove("visible");
       document.getElementById("barcode-result").classList.remove("visible");
+      document.getElementById("ocr-result").classList.remove("visible");
       resetButton.hidden = true;
     }
 
