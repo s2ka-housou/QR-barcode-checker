@@ -613,10 +613,19 @@
       const partRegion = hasOriginalQrPosition
         ? cropAboveQr(canvas, qrResult.position)
         : canvas;
-      const partNo = await recognizeCodeWithFallback(worker, [
+      let partNo = await recognizeCodeWithFallback(worker, [
+        upscaleCanvas(partRegion, 1.15),
         prepareContrastForOcr(partRegion, false, 1),
         prepareContrastForOcr(partRegion, true, 1)
       ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+
+      // 上側切出しで見つからない場合のみ、従来どおり写真全体を1回確認する。
+      if (partNo !== qr.partNo && partRegion !== canvas) {
+        const wholeImagePart = await recognizeCodeWithFallback(worker, [
+          upscaleCanvas(canvas, 1)
+        ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        if (wholeImagePart === qr.partNo || !partNo) partNo = wholeImagePart;
+      }
 
       // 黒ラベルはQRの左側を切り出し、製造ロットとナンバリングを別々の1行として読む。
       const labelCanvas = hasOriginalQrPosition
@@ -626,16 +635,47 @@
         return { partNo, mfgLot: "", numbering: "" };
       }
 
-      const lotRegion = cropCanvasFraction(labelCanvas, 0, 0, 1, 0.58);
-      const numberRegion = cropCanvasFraction(labelCanvas, 0, 0.38, 1, 0.62);
-      const mfgLot = await recognizeCodeWithFallback(worker, [
-        prepareContrastForOcr(lotRegion, true, 2),
-        upscaleCanvas(lotRegion, 2)
-      ], "7", "lot", qr.mfgLot, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-      const numbering = await recognizeCodeWithFallback(worker, [
-        prepareContrastForOcr(numberRegion, true, 2),
-        upscaleCanvas(numberRegion, 2)
-      ], "7", "number", qr.numbering, "0123456789");
+      // まず黒ラベル全体を2行のブロックとして読む。前版で読めていた経路を優先する。
+      let labelText = await recognizeAlphaNumeric(
+        worker,
+        upscaleCanvas(labelCanvas, 2),
+        "6",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+      );
+      let mfgLot = pickCode(labelText, "lot", qr.mfgLot);
+      let numbering = pickCode(labelText, "number", qr.numbering);
+
+      // どちらかが一致しない場合だけ、反転コントラスト画像を追加で試す。
+      if (mfgLot !== qr.mfgLot || numbering !== qr.numbering) {
+        const correctedText = await recognizeAlphaNumeric(
+          worker,
+          prepareContrastForOcr(labelCanvas, true, 2),
+          "6",
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        );
+        labelText += ` ${correctedText}`;
+        mfgLot = pickCode(labelText, "lot", qr.mfgLot);
+        numbering = pickCode(labelText, "number", qr.numbering);
+      }
+
+      // まだ一致しない項目だけ、上下を分けて1行モードで再試行する。
+      if (mfgLot !== qr.mfgLot) {
+        const lotRegion = cropCanvasFraction(labelCanvas, 0, 0, 1, 0.62);
+        const lotRetry = await recognizeCodeWithFallback(worker, [
+          upscaleCanvas(lotRegion, 2),
+          prepareContrastForOcr(lotRegion, true, 2)
+        ], "7", "lot", qr.mfgLot, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        if (lotRetry === qr.mfgLot || !mfgLot) mfgLot = lotRetry;
+      }
+
+      if (numbering !== qr.numbering) {
+        const numberRegion = cropCanvasFraction(labelCanvas, 0, 0.32, 1, 0.68);
+        const numberRetry = await recognizeCodeWithFallback(worker, [
+          upscaleCanvas(numberRegion, 2),
+          prepareContrastForOcr(numberRegion, true, 2)
+        ], "7", "number", qr.numbering, "0123456789");
+        if (numberRetry === qr.numbering || !numbering) numbering = numberRetry;
+      }
 
       return {
         partNo,
@@ -746,7 +786,7 @@
       if (!bounds) return null;
       const { minX, maxX, minY, maxY } = bounds;
       const qrSize = Math.max(maxX - minX, maxY - minY);
-      const left = Math.max(0, Math.floor(minX - qrSize * 1.9));
+      const left = Math.max(0, Math.floor(minX - qrSize * 1.55));
       const top = Math.max(0, Math.floor(minY - qrSize * 0.12));
       const right = Math.min(canvas.width, Math.ceil(minX + qrSize * 0.03));
       const bottom = Math.min(canvas.height, Math.ceil(maxY + qrSize * 0.12));
