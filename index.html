@@ -986,7 +986,8 @@
           }
         }
         if (bottom < top) return cropCanvasRect(canvas, run.start, 0, run.end - run.start + 1, height);
-        const marginX = Math.max(2, Math.round((run.end - run.start + 1) * 0.12));
+        // QやRなど右下へ線が伸びる文字を切らないよう、左右へ十分な余白を残す。
+        const marginX = Math.max(8, Math.round((run.end - run.start + 1) * 0.30));
         const marginY = Math.max(2, Math.round((bottom - top + 1) * 0.10));
         const left = Math.max(0, run.start - marginX);
         const right = Math.min(width, run.end + 1 + marginX);
