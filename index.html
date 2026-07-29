@@ -1465,7 +1465,7 @@
 
     function ocrScaleForLine(canvas, targetHeight) {
       // 近接撮影された大きな文字は縮小し、小さい文字だけを拡大する。
-      return clamp(targetHeight / Math.max(1, canvas.height), 0.55, 2.5);
+      return clamp(targetHeight / Math.max(1, canvas.height), 0.18, 2.5);
     }
 
     function upscaleCanvas(canvas, scale, smooth = true) {
@@ -1480,7 +1480,7 @@
     }
 
     function prepareBinaryForOcr(canvas, invert, scale = 2) {
-      const output = upscaleCanvas(canvas, scale, false);
+      const output = upscaleCanvas(canvas, scale, scale < 1);
       const context = output.getContext("2d", { willReadFrequently: true });
       const image = context.getImageData(0, 0, output.width, output.height);
       const data = image.data;
@@ -1510,7 +1510,7 @@
     }
 
     function prepareFixedBinaryForOcr(canvas, invert, scale, threshold) {
-      const output = upscaleCanvas(canvas, scale, false);
+      const output = upscaleCanvas(canvas, scale, scale < 1);
       const context = output.getContext("2d", { willReadFrequently: true });
       const image = context.getImageData(0, 0, output.width, output.height);
       const data = image.data;
