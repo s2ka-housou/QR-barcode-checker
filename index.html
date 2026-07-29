@@ -640,13 +640,18 @@
           : canvas;
       // 黒い品番ラベルを検出できた場合は、その部分だけを1行として先に読む。
       // 広い範囲をPSM 11で読むより、Q/Sなど輪郭の近い文字を区別しやすい。
-      const darkPartPanel = findDarkTextPanel(partRegion);
+      const darkPanelCandidate = findDarkTextPanel(partRegion);
+      const darkPartPanel = darkPanelCandidate && isMostlyDarkCanvas(darkPanelCandidate)
+        ? darkPanelCandidate
+        : null;
       let partNo = "";
       if (darkPartPanel) {
         const tightPartPanel = cropLightTextBounds(darkPartPanel) || darkPartPanel;
         const focusedPartVariants = [
           padCanvas(prepareBinaryForOcr(tightPartPanel, true, 3), 0.12, 255),
-          padCanvas(prepareContrastForOcr(tightPartPanel, true, 2.6), 0.12, 255)
+          padCanvas(prepareContrastForOcr(tightPartPanel, true, 2.6), 0.12, 255),
+          padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, 3, 95), 0.12, 255),
+          padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, 3, 135), 0.12, 255)
         ];
         partNo = await recognizeCodeWithFallback(
           worker,
@@ -667,6 +672,17 @@
           );
           if (singleWordPart === qr.partNo || !partNo) partNo = singleWordPart;
         }
+        if (partNo !== qr.partNo) {
+          const rawLinePart = await recognizeCodeWithFallback(
+            worker,
+            focusedPartVariants,
+            "13",
+            "part",
+            qr.partNo,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+          );
+          if (rawLinePart === qr.partNo || !partNo) partNo = rawLinePart;
+        }
       }
 
       // 黒ラベルがない箱や、専用切出しで一致しない場合は従来の広域解析を試す。
@@ -679,6 +695,49 @@
           prepareBinaryForOcr(partRegion, true, 1.35)
         ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
         if (broadPart === qr.partNo || !partNo) partNo = broadPart;
+      }
+
+      // 段ボール地へ直接印刷された品番は、上側を横方向に重ねて分割し、
+      // 罫線や商品説明を避けながら最も濃い文字行だけを読む。
+      if (partNo !== qr.partNo && !darkPartPanel) {
+        const horizontalRegions = [
+          cropCanvasFraction(partRegion, 0, 0, 0.48, 1),
+          cropCanvasFraction(partRegion, 0.26, 0, 0.48, 1),
+          cropCanvasFraction(partRegion, 0.52, 0, 0.48, 1)
+        ];
+
+        for (const region of horizontalRegions) {
+          const textLine = cropDarkTextLineBounds(region);
+          if (!textLine) continue;
+          const lineVariants = [
+            padCanvas(prepareBinaryForOcr(textLine, false, 2.8), 0.14, 255),
+            padCanvas(prepareContrastForOcr(textLine, false, 2.4), 0.14, 255)
+          ];
+          let linePart = await recognizeCodeWithFallback(
+            worker,
+            lineVariants,
+            "7",
+            "part",
+            qr.partNo,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+          );
+          if (linePart !== qr.partNo) {
+            const wordPart = await recognizeCodeWithFallback(
+              worker,
+              lineVariants,
+              "8",
+              "part",
+              qr.partNo,
+              "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            );
+            if (wordPart === qr.partNo || !linePart) linePart = wordPart;
+          }
+          if (linePart === qr.partNo) {
+            partNo = linePart;
+            break;
+          }
+          if (!partNo && linePart) partNo = linePart;
+        }
       }
 
       // 上側切出しで見つからない場合のみ、従来どおり写真全体を1回確認する。
@@ -1026,6 +1085,93 @@
       return total / Math.max(1, end - start + 1);
     }
 
+    function isMostlyDarkCanvas(canvas) {
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      const step = Math.max(1, Math.floor(Math.max(canvas.width, canvas.height) / 500));
+      let total = 0;
+      let count = 0;
+
+      for (let y = 0; y < canvas.height; y += step) {
+        for (let x = 0; x < canvas.width; x += step) {
+          const index = (y * canvas.width + x) * 4;
+          total += 0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          count += 1;
+        }
+      }
+      return count > 0 && total / count < 105;
+    }
+
+    function cropDarkTextLineBounds(canvas) {
+      const width = canvas.width;
+      const height = canvas.height;
+      if (width < 30 || height < 20) return null;
+
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const rowDensity = [];
+
+      for (let y = 0; y < height; y += 1) {
+        let dark = 0;
+        for (let x = 0; x < width; x += 1) {
+          const index = (y * width + x) * 4;
+          const gray = 0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          if (gray < 88) dark += 1;
+        }
+        rowDensity.push(dark / width);
+      }
+
+      const rowRuns = findDenseRuns(rowDensity, 0.035, 3)
+        .filter(run => run.end - run.start + 1 >= Math.max(5, height * 0.07));
+      if (!rowRuns.length) return null;
+
+      const bestRow = rowRuns.reduce((best, run) => {
+        const runHeight = run.end - run.start + 1;
+        const density = averageRange(rowDensity, run.start, run.end);
+        const score = runHeight * runHeight * density;
+        return !best || score > best.score ? { ...run, score } : best;
+      }, null);
+      const top = bestRow.start;
+      const bottom = bestRow.end + 1;
+      const columnDensity = [];
+
+      for (let x = 0; x < width; x += 1) {
+        let dark = 0;
+        for (let y = top; y < bottom; y += 1) {
+          const index = (y * width + x) * 4;
+          const gray = 0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          if (gray < 88) dark += 1;
+        }
+        columnDensity.push(dark / Math.max(1, bottom - top));
+      }
+
+      const columnRuns = findDenseRuns(columnDensity, 0.04, 1);
+      if (!columnRuns.length) return null;
+      const left = columnRuns[0].start;
+      const right = columnRuns[columnRuns.length - 1].end + 1;
+      if (right - left < width * 0.16) return null;
+
+      const marginX = Math.round((right - left) * 0.04);
+      const marginY = Math.round((bottom - top) * 0.12);
+      const cropLeft = Math.max(0, left - marginX);
+      const cropTop = Math.max(0, top - marginY);
+      const cropRight = Math.min(width, right + marginX);
+      const cropBottom = Math.min(height, bottom + marginY);
+      return cropCanvasRect(
+        canvas,
+        cropLeft,
+        cropTop,
+        cropRight - cropLeft,
+        cropBottom - cropTop
+      );
+    }
+
     function cropLightTextBounds(canvas) {
       const width = canvas.width;
       const height = canvas.height;
@@ -1170,6 +1316,26 @@
       const threshold = otsuThreshold(histogram, grayscale.length);
       for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
         const value = grayscale[pixel] <= threshold ? 0 : 255;
+        data[index] = value;
+        data[index + 1] = value;
+        data[index + 2] = value;
+      }
+      context.putImageData(image, 0, 0);
+      return output;
+    }
+
+    function prepareFixedBinaryForOcr(canvas, invert, scale, threshold) {
+      const output = upscaleCanvas(canvas, scale, false);
+      const context = output.getContext("2d", { willReadFrequently: true });
+      const image = context.getImageData(0, 0, output.width, output.height);
+      const data = image.data;
+
+      for (let index = 0; index < data.length; index += 4) {
+        const gray = 0.299 * data[index] +
+          0.587 * data[index + 1] +
+          0.114 * data[index + 2];
+        const isForeground = invert ? gray >= threshold : gray <= threshold;
+        const value = isForeground ? 0 : 255;
         data[index] = value;
         data[index + 1] = value;
         data[index + 2] = value;
