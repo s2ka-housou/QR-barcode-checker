@@ -613,11 +613,29 @@
       const partRegion = hasOriginalQrPosition
         ? cropAboveQr(canvas, qrResult.position)
         : canvas;
-      let partNo = await recognizeCodeWithFallback(worker, [
-        upscaleCanvas(partRegion, 1.15),
-        prepareContrastForOcr(partRegion, false, 1),
-        prepareContrastForOcr(partRegion, true, 1)
-      ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+      // 黒い品番ラベルを検出できた場合は、その部分だけを1行として先に読む。
+      // 広い範囲をPSM 11で読むより、Q/Sなど輪郭の近い文字を区別しやすい。
+      const darkPartPanel = findDarkTextPanel(partRegion);
+      let partNo = "";
+      if (darkPartPanel) {
+        partNo = await recognizeCodeWithFallback(worker, [
+          prepareBinaryForOcr(darkPartPanel, true, 2.4),
+          prepareContrastForOcr(darkPartPanel, true, 2.1),
+          upscaleCanvas(darkPartPanel, 2, false)
+        ], "7", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+      }
+
+      // 黒ラベルがない箱や、専用切出しで一致しない場合は従来の広域解析を試す。
+      if (partNo !== qr.partNo) {
+        const broadPart = await recognizeCodeWithFallback(worker, [
+          upscaleCanvas(partRegion, 1.15),
+          prepareContrastForOcr(partRegion, false, 1),
+          prepareContrastForOcr(partRegion, true, 1),
+          prepareBinaryForOcr(partRegion, false, 1.35),
+          prepareBinaryForOcr(partRegion, true, 1.35)
+        ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        if (broadPart === qr.partNo || !partNo) partNo = broadPart;
+      }
 
       // 上側切出しで見つからない場合のみ、従来どおり写真全体を1回確認する。
       if (partNo !== qr.partNo && partRegion !== canvas) {
@@ -781,6 +799,103 @@
       return cropCanvasRect(canvas, 0, top, canvas.width, bottom - top);
     }
 
+    function findDarkTextPanel(canvas) {
+      const width = canvas.width;
+      const height = canvas.height;
+      if (width < 40 || height < 30) return null;
+
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const step = Math.max(1, Math.floor(Math.max(width, height) / 900));
+      const sampledColumns = Math.ceil(width / step);
+      const rowDensity = [];
+
+      for (let y = 0; y < height; y += step) {
+        let dark = 0;
+        for (let x = 0; x < width; x += step) {
+          const index = (y * width + x) * 4;
+          const gray = 0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          if (gray < 92) dark += 1;
+        }
+        rowDensity.push(dark / sampledColumns);
+      }
+
+      const rowRuns = findDenseRuns(rowDensity, 0.2, 2);
+      const minimumRows = Math.max(3, Math.floor(height * 0.065 / step));
+      const usableRows = rowRuns.filter(run => run.end - run.start + 1 >= minimumRows);
+      if (!usableRows.length) return null;
+
+      const bestRow = usableRows.reduce((best, run) => {
+        const density = averageRange(rowDensity, run.start, run.end);
+        const score = (run.end - run.start + 1) * density;
+        return !best || score > best.score ? { ...run, score } : best;
+      }, null);
+
+      const top = bestRow.start * step;
+      const bottom = Math.min(height, (bestRow.end + 1) * step);
+      const sampledRows = Math.max(1, Math.ceil((bottom - top) / step));
+      const columnDensity = [];
+
+      for (let x = 0; x < width; x += step) {
+        let dark = 0;
+        for (let y = top; y < bottom; y += step) {
+          const index = (y * width + x) * 4;
+          const gray = 0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          if (gray < 92) dark += 1;
+        }
+        columnDensity.push(dark / sampledRows);
+      }
+
+      const columnRuns = findDenseRuns(columnDensity, 0.45, 3);
+      const minimumColumns = Math.max(4, Math.floor(width * 0.22 / step));
+      const usableColumns = columnRuns.filter(run => run.end - run.start + 1 >= minimumColumns);
+      if (!usableColumns.length) return null;
+
+      const bestColumn = usableColumns.reduce((best, run) =>
+        !best || run.end - run.start > best.end - best.start ? run : best, null);
+      const left = bestColumn.start * step;
+      const right = Math.min(width, (bestColumn.end + 1) * step);
+      const marginX = Math.round((right - left) * 0.025);
+      const marginY = Math.round((bottom - top) * 0.08);
+
+      return cropCanvasRect(
+        canvas,
+        Math.max(0, left - marginX),
+        Math.max(0, top - marginY),
+        Math.min(width, right + marginX) - Math.max(0, left - marginX),
+        Math.min(height, bottom + marginY) - Math.max(0, top - marginY)
+      );
+    }
+
+    function findDenseRuns(values, threshold, allowedGap) {
+      const runs = [];
+      let start = -1;
+      let lastDense = -1;
+
+      for (let index = 0; index < values.length; index += 1) {
+        if (values[index] >= threshold) {
+          if (start < 0) start = index;
+          lastDense = index;
+        } else if (start >= 0 && index - lastDense > allowedGap) {
+          runs.push({ start, end: lastDense });
+          start = -1;
+          lastDense = -1;
+        }
+      }
+      if (start >= 0) runs.push({ start, end: lastDense });
+      return runs;
+    }
+
+    function averageRange(values, start, end) {
+      let total = 0;
+      for (let index = start; index <= end; index += 1) total += values[index];
+      return total / Math.max(1, end - start + 1);
+    }
+
     function cropLeftOfQr(canvas, position) {
       const bounds = getPositionBounds(position);
       if (!bounds) return null;
@@ -814,14 +929,76 @@
       return result;
     }
 
-    function upscaleCanvas(canvas, scale) {
+    function upscaleCanvas(canvas, scale, smooth = true) {
       const output = document.createElement("canvas");
       output.width = Math.round(canvas.width * scale);
       output.height = Math.round(canvas.height * scale);
       const context = output.getContext("2d", { willReadFrequently: true });
-      context.imageSmoothingEnabled = true;
+      context.imageSmoothingEnabled = smooth;
+      if (smooth) context.imageSmoothingQuality = "high";
       context.drawImage(canvas, 0, 0, output.width, output.height);
       return output;
+    }
+
+    function prepareBinaryForOcr(canvas, invert, scale = 2) {
+      const output = upscaleCanvas(canvas, scale, false);
+      const context = output.getContext("2d", { willReadFrequently: true });
+      const image = context.getImageData(0, 0, output.width, output.height);
+      const data = image.data;
+      const histogram = new Uint32Array(256);
+      const grayscale = new Uint8Array(output.width * output.height);
+
+      for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
+        const gray = Math.round(
+          0.299 * data[index] +
+          0.587 * data[index + 1] +
+          0.114 * data[index + 2]
+        );
+        const value = invert ? 255 - gray : gray;
+        grayscale[pixel] = value;
+        histogram[value] += 1;
+      }
+
+      const threshold = otsuThreshold(histogram, grayscale.length);
+      for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
+        const value = grayscale[pixel] <= threshold ? 0 : 255;
+        data[index] = value;
+        data[index + 1] = value;
+        data[index + 2] = value;
+      }
+      context.putImageData(image, 0, 0);
+      return output;
+    }
+
+    function otsuThreshold(histogram, totalPixels) {
+      let weightedTotal = 0;
+      for (let value = 0; value < 256; value += 1) {
+        weightedTotal += value * histogram[value];
+      }
+
+      let backgroundWeight = 0;
+      let backgroundTotal = 0;
+      let bestThreshold = 127;
+      let bestVariance = -1;
+
+      for (let value = 0; value < 256; value += 1) {
+        backgroundWeight += histogram[value];
+        if (!backgroundWeight) continue;
+        const foregroundWeight = totalPixels - backgroundWeight;
+        if (!foregroundWeight) break;
+
+        backgroundTotal += value * histogram[value];
+        const backgroundMean = backgroundTotal / backgroundWeight;
+        const foregroundMean = (weightedTotal - backgroundTotal) / foregroundWeight;
+        const difference = backgroundMean - foregroundMean;
+        const variance = backgroundWeight * foregroundWeight * difference * difference;
+
+        if (variance > bestVariance) {
+          bestVariance = variance;
+          bestThreshold = value;
+        }
+      }
+      return bestThreshold;
     }
 
     function prepareContrastForOcr(canvas, invert, scale = 3) {
