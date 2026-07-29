@@ -643,10 +643,10 @@
       const darkPartPanel = findDarkTextPanel(partRegion);
       let partNo = "";
       if (darkPartPanel) {
+        const tightPartPanel = cropLightTextBounds(darkPartPanel) || darkPartPanel;
         const focusedPartVariants = [
-          prepareBinaryForOcr(darkPartPanel, true, 2.4),
-          prepareContrastForOcr(darkPartPanel, true, 2.1),
-          upscaleCanvas(darkPartPanel, 2, false)
+          padCanvas(prepareBinaryForOcr(tightPartPanel, true, 3), 0.12, 255),
+          padCanvas(prepareContrastForOcr(tightPartPanel, true, 2.6), 0.12, 255)
         ];
         partNo = await recognizeCodeWithFallback(
           worker,
@@ -693,7 +693,7 @@
       const labelCanvas = hasOriginalQrPosition
         ? cropLeftOfQr(canvas, qrResult.position)
         : detectedQrLabel
-          ? cropCanvasFraction(detectedQrLabel, 0, 0, 0.54, 1)
+          ? cropCanvasFraction(detectedQrLabel, 0.01, 0, 0.50, 1)
           : null;
       if (!labelCanvas) {
         return { partNo, mfgLot: "", numbering: "" };
@@ -724,20 +724,60 @@
 
       // まだ一致しない項目だけ、上下を分けて1行モードで再試行する。
       if (mfgLot !== qr.mfgLot) {
-        const lotRegion = cropCanvasFraction(labelCanvas, 0, 0, 1, 0.62);
-        const lotRetry = await recognizeCodeWithFallback(worker, [
-          upscaleCanvas(lotRegion, 2),
-          prepareContrastForOcr(lotRegion, true, 2)
-        ], "7", "lot", qr.mfgLot, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        const roughLotRegion = cropCanvasFraction(labelCanvas, 0.02, 0.04, 0.96, 0.54);
+        const lotRegion = cropLightTextBounds(roughLotRegion) || roughLotRegion;
+        const lotVariants = [
+          padCanvas(prepareBinaryForOcr(lotRegion, true, 3), 0.16, 255),
+          padCanvas(prepareContrastForOcr(lotRegion, true, 2.7), 0.16, 255)
+        ];
+        let lotRetry = await recognizeCodeWithFallback(
+          worker,
+          lotVariants,
+          "7",
+          "lot",
+          qr.mfgLot,
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        );
+        if (lotRetry !== qr.mfgLot) {
+          const lotWordRetry = await recognizeCodeWithFallback(
+            worker,
+            lotVariants,
+            "8",
+            "lot",
+            qr.mfgLot,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+          );
+          if (lotWordRetry === qr.mfgLot || !lotRetry) lotRetry = lotWordRetry;
+        }
         if (lotRetry === qr.mfgLot || !mfgLot) mfgLot = lotRetry;
       }
 
       if (numbering !== qr.numbering) {
-        const numberRegion = cropCanvasFraction(labelCanvas, 0, 0.32, 1, 0.68);
-        const numberRetry = await recognizeCodeWithFallback(worker, [
-          upscaleCanvas(numberRegion, 2),
-          prepareContrastForOcr(numberRegion, true, 2)
-        ], "7", "number", qr.numbering, "0123456789");
+        const roughNumberRegion = cropCanvasFraction(labelCanvas, 0.05, 0.42, 0.90, 0.55);
+        const numberRegion = cropLightTextBounds(roughNumberRegion) || roughNumberRegion;
+        const numberVariants = [
+          padCanvas(prepareBinaryForOcr(numberRegion, true, 3.2), 0.18, 255),
+          padCanvas(prepareContrastForOcr(numberRegion, true, 2.8), 0.18, 255)
+        ];
+        let numberRetry = await recognizeCodeWithFallback(
+          worker,
+          numberVariants,
+          "7",
+          "number",
+          qr.numbering,
+          "0123456789"
+        );
+        if (numberRetry !== qr.numbering) {
+          const numberWordRetry = await recognizeCodeWithFallback(
+            worker,
+            numberVariants,
+            "8",
+            "number",
+            qr.numbering,
+            "0123456789"
+          );
+          if (numberWordRetry === qr.numbering || !numberRetry) numberRetry = numberWordRetry;
+        }
         if (numberRetry === qr.numbering || !numbering) numbering = numberRetry;
       }
 
@@ -986,6 +1026,72 @@
       return total / Math.max(1, end - start + 1);
     }
 
+    function cropLightTextBounds(canvas) {
+      const width = canvas.width;
+      const height = canvas.height;
+      if (width < 20 || height < 12) return null;
+
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const rowDensity = [];
+
+      for (let y = 0; y < height; y += 1) {
+        let light = 0;
+        for (let x = 0; x < width; x += 1) {
+          const index = (y * width + x) * 4;
+          const gray = 0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          if (gray > 118) light += 1;
+        }
+        rowDensity.push(light / width);
+      }
+
+      const rowRuns = findDenseRuns(rowDensity, 0.025, 2)
+        .filter(run => run.end - run.start + 1 >= Math.max(4, height * 0.10));
+      if (!rowRuns.length) return null;
+
+      const bestRow = rowRuns.reduce((best, run) => {
+        const score = (run.end - run.start + 1) * averageRange(rowDensity, run.start, run.end);
+        return !best || score > best.score ? { ...run, score } : best;
+      }, null);
+      const top = bestRow.start;
+      const bottom = bestRow.end + 1;
+      const columnDensity = [];
+
+      for (let x = 0; x < width; x += 1) {
+        let light = 0;
+        for (let y = top; y < bottom; y += 1) {
+          const index = (y * width + x) * 4;
+          const gray = 0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          if (gray > 118) light += 1;
+        }
+        columnDensity.push(light / Math.max(1, bottom - top));
+      }
+
+      const columnRuns = findDenseRuns(columnDensity, 0.04, 1);
+      if (!columnRuns.length) return null;
+      const left = columnRuns[0].start;
+      const right = columnRuns[columnRuns.length - 1].end + 1;
+      if (right - left < width * 0.18) return null;
+
+      const marginX = Math.round((right - left) * 0.05);
+      const marginY = Math.round((bottom - top) * 0.14);
+      const cropLeft = Math.max(0, left - marginX);
+      const cropTop = Math.max(0, top - marginY);
+      const cropRight = Math.min(width, right + marginX);
+      const cropBottom = Math.min(height, bottom + marginY);
+      return cropCanvasRect(
+        canvas,
+        cropLeft,
+        cropTop,
+        cropRight - cropLeft,
+        cropBottom - cropTop
+      );
+    }
+
     function cropLeftOfQr(canvas, position) {
       const bounds = getPositionBounds(position);
       if (!bounds) return null;
@@ -1017,6 +1123,18 @@
       result.getContext("2d", { willReadFrequently: true })
         .drawImage(canvas, left, top, result.width, result.height, 0, 0, result.width, result.height);
       return result;
+    }
+
+    function padCanvas(canvas, fraction = 0.12, fill = 255) {
+      const padding = Math.max(8, Math.round(Math.max(canvas.width, canvas.height) * fraction));
+      const output = document.createElement("canvas");
+      output.width = canvas.width + padding * 2;
+      output.height = canvas.height + padding * 2;
+      const context = output.getContext("2d", { willReadFrequently: true });
+      context.fillStyle = `rgb(${fill}, ${fill}, ${fill})`;
+      context.fillRect(0, 0, output.width, output.height);
+      context.drawImage(canvas, padding, padding);
+      return output;
     }
 
     function upscaleCanvas(canvas, scale, smooth = true) {
