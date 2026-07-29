@@ -647,13 +647,27 @@
           : canvas;
       // 黒い品番ラベルを検出できた場合は、その部分だけを1行として先に読む。
       // 広い範囲をPSM 11で読むより、Q/Sなど輪郭の近い文字を区別しやすい。
-      const darkPanelCandidate = findDarkTextPanel(partRegion);
-      const darkPartPanel = darkPanelCandidate && isMostlyDarkCanvas(darkPanelCandidate)
-        ? darkPanelCandidate
-        : null;
+      const darkPartPanels = [];
+      for (const threshold of [92, 130]) {
+        const candidate = findDarkTextPanel(partRegion, threshold);
+        if (!candidate || !isMostlyDarkCanvas(candidate)) continue;
+        const duplicate = darkPartPanels.some(entry =>
+          entry.panel.sourceRect && candidate.sourceRect &&
+          Math.abs(entry.panel.sourceRect.left - candidate.sourceRect.left) < 8 &&
+          Math.abs(entry.panel.sourceRect.top - candidate.sourceRect.top) < 8 &&
+          Math.abs(entry.panel.sourceRect.width - candidate.sourceRect.width) < 12 &&
+          Math.abs(entry.panel.sourceRect.height - candidate.sourceRect.height) < 12
+        );
+        if (!duplicate) {
+          darkPartPanels.push({
+            panel: candidate,
+            lightThreshold: threshold === 92 ? 118 : 145
+          });
+        }
+      }
       let partNo = "";
-      if (darkPartPanel) {
-        const tightPartPanel = cropLightTextBounds(darkPartPanel) || darkPartPanel;
+      for (const { panel: darkPartPanel, lightThreshold } of darkPartPanels) {
+        const tightPartPanel = cropLightTextBounds(darkPartPanel, lightThreshold) || darkPartPanel;
         const darkPartScale = ocrScaleForLine(tightPartPanel, 135);
         const focusedPartVariants = [
           padCanvas(prepareBinaryForOcr(tightPartPanel, true, darkPartScale), 0.12, 255),
@@ -699,6 +713,7 @@
           );
           if (segmentedPart === qr.partNo || !partNo) partNo = segmentedPart;
         }
+        if (partNo === qr.partNo) break;
       }
 
       // 黒ラベルがない箱や、専用切出しで一致しない場合は従来の広域解析を試す。
@@ -715,7 +730,7 @@
 
       // 段ボール地へ直接印刷された品番は、上側を横方向に重ねて分割し、
       // 罫線や商品説明を避けながら最も濃い文字行だけを読む。
-      if (partNo !== qr.partNo && !darkPartPanel) {
+      if (partNo !== qr.partNo && !darkPartPanels.length) {
         const horizontalRegions = [
           cropCanvasFraction(partRegion, 0, 0, 0.40, 1),
           cropCanvasFraction(partRegion, 0.22, 0, 0.60, 1),
@@ -1141,7 +1156,7 @@
       return cropCanvasRect(canvas, 0, top, canvas.width, bottom - top);
     }
 
-    function findDarkTextPanel(canvas) {
+    function findDarkTextPanel(canvas, darkThreshold = 92) {
       const width = canvas.width;
       const height = canvas.height;
       if (width < 40 || height < 30) return null;
@@ -1159,7 +1174,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray < 130) dark += 1;
+          if (gray < darkThreshold) dark += 1;
         }
         rowDensity.push(dark / sampledColumns);
       }
@@ -1187,7 +1202,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray < 130) dark += 1;
+          if (gray < darkThreshold) dark += 1;
         }
         columnDensity.push(dark / sampledRows);
       }
@@ -1362,7 +1377,7 @@
       );
     }
 
-    function cropLightTextBounds(canvas) {
+    function cropLightTextBounds(canvas, lightThreshold = 118) {
       const width = canvas.width;
       const height = canvas.height;
       if (width < 20 || height < 12) return null;
@@ -1378,7 +1393,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray > 145) light += 1;
+          if (gray > lightThreshold) light += 1;
         }
         rowDensity.push(light / width);
       }
@@ -1402,7 +1417,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray > 145) light += 1;
+          if (gray > lightThreshold) light += 1;
         }
         columnDensity.push(light / Math.max(1, bottom - top));
       }
