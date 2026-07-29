@@ -176,6 +176,12 @@
       word-break: break-all;
     }
 
+    .barcode-judge {
+      margin: 10px 0 0;
+      font-weight: 800;
+      text-align: center;
+    }
+
     .secondary {
       margin-top: 12px;
       background: #64748b;
@@ -314,6 +320,7 @@
     <section id="barcode-result" class="card result-card">
       <h2>ITFバーコード</h2>
       <p id="res-barcode" class="barcode"></p>
+      <p id="res-barcode-status" class="barcode-judge"></p>
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
@@ -1152,7 +1159,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray < 92) dark += 1;
+          if (gray < 130) dark += 1;
         }
         rowDensity.push(dark / sampledColumns);
       }
@@ -1180,7 +1187,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray < 92) dark += 1;
+          if (gray < 130) dark += 1;
         }
         columnDensity.push(dark / sampledRows);
       }
@@ -1270,18 +1277,21 @@
       const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
       const step = Math.max(1, Math.floor(Math.max(canvas.width, canvas.height) / 500));
       let total = 0;
+      let dark = 0;
       let count = 0;
 
       for (let y = 0; y < canvas.height; y += step) {
         for (let x = 0; x < canvas.width; x += step) {
           const index = (y * canvas.width + x) * 4;
-          total += 0.299 * pixels[index] +
+          const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
+          total += gray;
+          if (gray < 130) dark += 1;
           count += 1;
         }
       }
-      return count > 0 && total / count < 105;
+      return count > 0 && (dark / count >= 0.52 || total / count < 120);
     }
 
     function cropDarkTextLineBounds(canvas) {
@@ -1368,7 +1378,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray > 118) light += 1;
+          if (gray > 145) light += 1;
         }
         rowDensity.push(light / width);
       }
@@ -1392,7 +1402,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray > 118) light += 1;
+          if (gray > 145) light += 1;
         }
         columnDensity.push(light / Math.max(1, bottom - top));
       }
@@ -1627,8 +1637,13 @@
         renderOcrComparison(parsed);
       }
 
-      if (barcodeData) {
-        setText("res-barcode", normalizeBarcode(barcodeData.text));
+      if (qrData || barcodeData) {
+        setText("res-barcode", barcodeData ? normalizeBarcode(barcodeData.text) : "");
+        const barcodeStatus = document.getElementById("res-barcode-status");
+        const barcodeMatches = Boolean(qrData && barcodeData) &&
+          parseQRCode(qrData.text).itf === normalizeBarcode(barcodeData.text);
+        barcodeStatus.textContent = barcodeMatches ? "判定：OK" : "判定：NG";
+        barcodeStatus.className = `barcode-judge ${barcodeMatches ? "match-ok" : "match-ng"}`;
         barcodeResultBox.classList.add("visible");
       }
 
