@@ -324,7 +324,7 @@
 
     // このレイアウトにおけるコード位置。撮影時の余白の違いを吸収するため少し広めに取る。
     const LAYOUT = {
-      qr: { x: 0.47, y: 0.24, width: 0.43, height: 0.34, scale: 1.5 },
+      qr: { x: 0.28, y: 0.22, width: 0.70, height: 0.50, scale: 2 },
       itf: { x: 0.07, y: 0.56, width: 0.87, height: 0.29, scale: 1.3 }
     };
 
@@ -393,6 +393,21 @@
           const qrImage = cropByLayout(sourceCanvas, LAYOUT.qr);
           const qrResults = await scanVariants(qrImage, ["QRCode"], "QR領域");
           acceptResults(qrResults);
+        }
+
+        // 黒ラベルを検出できた場合は、QRがある右側だけを大きく拡大して再解析する。
+        if (!qrData) {
+          const darkLabel = findQrLabelPanel(sourceCanvas);
+          if (darkLabel) {
+            const qrCandidate = cropCanvasFraction(darkLabel, 0.40, 0, 0.60, 1);
+            const enlargedQr = upscaleCanvas(qrCandidate, 3, false);
+            const focusedResults = await scanVariants(
+              canvasImageData(enlargedQr),
+              ["QRCode"],
+              "黒ラベル内QR"
+            );
+            acceptResults(focusedResults);
+          }
         }
 
         if (!barcodeData) {
@@ -610,19 +625,48 @@
 
       // 品番はQRより上側だけを対象にする。位置は固定せず、背景の明暗を両方試す。
       const hasOriginalQrPosition = qrResult.method.startsWith("全体画像");
+      const detectedQrLabel = hasOriginalQrPosition ? null : findQrLabelPanel(canvas);
+      const detectedLabelTop = detectedQrLabel?.sourceRect?.top;
       const partRegion = hasOriginalQrPosition
         ? cropAboveQr(canvas, qrResult.position)
-        : canvas;
+        : Number.isFinite(detectedLabelTop)
+          ? cropCanvasRect(
+              canvas,
+              0,
+              0,
+              canvas.width,
+              Math.max(1, Math.floor(detectedLabelTop - canvas.height * 0.02))
+            )
+          : canvas;
       // 黒い品番ラベルを検出できた場合は、その部分だけを1行として先に読む。
       // 広い範囲をPSM 11で読むより、Q/Sなど輪郭の近い文字を区別しやすい。
       const darkPartPanel = findDarkTextPanel(partRegion);
       let partNo = "";
       if (darkPartPanel) {
-        partNo = await recognizeCodeWithFallback(worker, [
+        const focusedPartVariants = [
           prepareBinaryForOcr(darkPartPanel, true, 2.4),
           prepareContrastForOcr(darkPartPanel, true, 2.1),
           upscaleCanvas(darkPartPanel, 2, false)
-        ], "7", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        ];
+        partNo = await recognizeCodeWithFallback(
+          worker,
+          focusedPartVariants,
+          "7",
+          "part",
+          qr.partNo,
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        );
+        if (partNo !== qr.partNo) {
+          const singleWordPart = await recognizeCodeWithFallback(
+            worker,
+            focusedPartVariants,
+            "8",
+            "part",
+            qr.partNo,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+          );
+          if (singleWordPart === qr.partNo || !partNo) partNo = singleWordPart;
+        }
       }
 
       // 黒ラベルがない箱や、専用切出しで一致しない場合は従来の広域解析を試す。
@@ -648,7 +692,9 @@
       // 黒ラベルはQRの左側を切り出し、製造ロットとナンバリングを別々の1行として読む。
       const labelCanvas = hasOriginalQrPosition
         ? cropLeftOfQr(canvas, qrResult.position)
-        : null;
+        : detectedQrLabel
+          ? cropCanvasFraction(detectedQrLabel, 0, 0, 0.54, 1)
+          : null;
       if (!labelCanvas) {
         return { partNo, mfgLot: "", numbering: "" };
       }
@@ -742,9 +788,19 @@
     function pickCode(ocrText, type, expectedValue) {
       const tokens = String(ocrText).match(/[A-Z0-9]+/g) || [];
       const joinedTokens = [...tokens];
-      for (let i = 0; i < tokens.length - 1; i += 1) {
-        if ((tokens[i] + tokens[i + 1]).length <= 8) {
-          joinedTokens.push(tokens[i] + tokens[i + 1]);
+      const targetLength = type === "number" ? 4 : (type === "lot" ? 6 : 8);
+
+      // 文字間隔が広い印字は「Q 025 4241」のように複数トークンへ分割される。
+      // 隣り合うトークンを、対象の文字数になるまで順番に連結して候補へ加える。
+      for (let start = 0; start < tokens.length; start += 1) {
+        let combined = "";
+        for (let end = start; end < tokens.length; end += 1) {
+          combined += tokens[end];
+          if (combined.length === targetLength) {
+            joinedTokens.push(combined);
+            break;
+          }
+          if (combined.length > targetLength) break;
         }
       }
       const candidates = [];
@@ -861,14 +917,48 @@
       const right = Math.min(width, (bestColumn.end + 1) * step);
       const marginX = Math.round((right - left) * 0.025);
       const marginY = Math.round((bottom - top) * 0.08);
-
-      return cropCanvasRect(
+      const cropLeft = Math.max(0, left - marginX);
+      const cropTop = Math.max(0, top - marginY);
+      const cropRight = Math.min(width, right + marginX);
+      const cropBottom = Math.min(height, bottom + marginY);
+      const panel = cropCanvasRect(
         canvas,
-        Math.max(0, left - marginX),
-        Math.max(0, top - marginY),
-        Math.min(width, right + marginX) - Math.max(0, left - marginX),
-        Math.min(height, bottom + marginY) - Math.max(0, top - marginY)
+        cropLeft,
+        cropTop,
+        cropRight - cropLeft,
+        cropBottom - cropTop
       );
+      panel.sourceRect = {
+        left: cropLeft,
+        top: cropTop,
+        width: cropRight - cropLeft,
+        height: cropBottom - cropTop
+      };
+      return panel;
+    }
+
+    function findQrLabelPanel(canvas) {
+      // 品番表示を避け、製造ロット・QRがある中央付近を広めに検索する。
+      const searchLeft = Math.floor(canvas.width * 0.10);
+      const searchTop = Math.floor(canvas.height * 0.28);
+      const searchWidth = Math.ceil(canvas.width * 0.88);
+      const searchHeight = Math.ceil(canvas.height * 0.50);
+      const search = cropCanvasRect(
+        canvas,
+        searchLeft,
+        searchTop,
+        searchWidth,
+        searchHeight
+      );
+      const panel = findDarkTextPanel(search);
+      if (!panel || !panel.sourceRect) return null;
+      panel.sourceRect = {
+        left: searchLeft + panel.sourceRect.left,
+        top: searchTop + panel.sourceRect.top,
+        width: panel.sourceRect.width,
+        height: panel.sourceRect.height
+      };
+      return panel;
     }
 
     function findDenseRuns(values, threshold, allowedGap) {
