@@ -647,11 +647,12 @@
       let partNo = "";
       if (darkPartPanel) {
         const tightPartPanel = cropLightTextBounds(darkPartPanel) || darkPartPanel;
+        const darkPartScale = ocrScaleForLine(tightPartPanel, 135);
         const focusedPartVariants = [
-          padCanvas(prepareBinaryForOcr(tightPartPanel, true, 3), 0.12, 255),
-          padCanvas(prepareContrastForOcr(tightPartPanel, true, 2.6), 0.12, 255),
-          padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, 3, 95), 0.12, 255),
-          padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, 3, 135), 0.12, 255)
+          padCanvas(prepareBinaryForOcr(tightPartPanel, true, darkPartScale), 0.12, 255),
+          padCanvas(prepareContrastForOcr(tightPartPanel, true, darkPartScale), 0.12, 255),
+          padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, darkPartScale, 95), 0.12, 255),
+          padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, darkPartScale, 135), 0.12, 255)
         ];
         partNo = await recognizeCodeWithFallback(
           worker,
@@ -686,7 +687,7 @@
         if (partNo !== qr.partNo) {
           const segmentedPart = await recognizeSegmentedPartNumber(
             worker,
-            prepareBinaryForOcr(tightPartPanel, true, 3),
+            prepareBinaryForOcr(tightPartPanel, true, darkPartScale),
             qr.partNo
           );
           if (segmentedPart === qr.partNo || !partNo) partNo = segmentedPart;
@@ -717,9 +718,10 @@
         for (const region of horizontalRegions) {
           const textLine = cropDarkTextLineBounds(region);
           if (!textLine) continue;
+          const textLineScale = ocrScaleForLine(textLine, 125);
           const lineVariants = [
-            padCanvas(prepareBinaryForOcr(textLine, false, 2.8), 0.14, 255),
-            padCanvas(prepareContrastForOcr(textLine, false, 2.4), 0.14, 255)
+            padCanvas(prepareBinaryForOcr(textLine, false, textLineScale), 0.14, 255),
+            padCanvas(prepareContrastForOcr(textLine, false, textLineScale), 0.14, 255)
           ];
           let linePart = await recognizeCodeWithFallback(
             worker,
@@ -1407,6 +1409,11 @@
       context.fillRect(0, 0, output.width, output.height);
       context.drawImage(canvas, padding, padding);
       return output;
+    }
+
+    function ocrScaleForLine(canvas, targetHeight) {
+      // 近接撮影された大きな文字は縮小し、小さい文字だけを拡大する。
+      return clamp(targetHeight / Math.max(1, canvas.height), 0.55, 2.5);
     }
 
     function upscaleCanvas(canvas, scale, smooth = true) {
