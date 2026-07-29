@@ -683,6 +683,14 @@
           );
           if (rawLinePart === qr.partNo || !partNo) partNo = rawLinePart;
         }
+        if (partNo !== qr.partNo) {
+          const segmentedPart = await recognizeSegmentedPartNumber(
+            worker,
+            prepareBinaryForOcr(tightPartPanel, true, 3),
+            qr.partNo
+          );
+          if (segmentedPart === qr.partNo || !partNo) partNo = segmentedPart;
+        }
       }
 
       // 黒ラベルがない箱や、専用切出しで一致しない場合は従来の広域解析を試す。
@@ -701,9 +709,9 @@
       // 罫線や商品説明を避けながら最も濃い文字行だけを読む。
       if (partNo !== qr.partNo && !darkPartPanel) {
         const horizontalRegions = [
-          cropCanvasFraction(partRegion, 0, 0, 0.48, 1),
-          cropCanvasFraction(partRegion, 0.26, 0, 0.48, 1),
-          cropCanvasFraction(partRegion, 0.52, 0, 0.48, 1)
+          cropCanvasFraction(partRegion, 0, 0, 0.40, 1),
+          cropCanvasFraction(partRegion, 0.22, 0, 0.60, 1),
+          cropCanvasFraction(partRegion, 0.55, 0, 0.45, 1)
         ];
 
         for (const region of horizontalRegions) {
@@ -731,6 +739,14 @@
               "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
             );
             if (wordPart === qr.partNo || !linePart) linePart = wordPart;
+          }
+          if (linePart !== qr.partNo) {
+            const segmentedPart = await recognizeSegmentedPartNumber(
+              worker,
+              lineVariants[0],
+              qr.partNo
+            );
+            if (segmentedPart === qr.partNo || !linePart) linePart = segmentedPart;
           }
           if (linePart === qr.partNo) {
             partNo = linePart;
@@ -884,9 +900,109 @@
       return fallback;
     }
 
+    async function recognizeSegmentedPartNumber(worker, binaryCanvas, expectedValue) {
+      const glyphs = segmentGlyphCanvases(binaryCanvas, 8);
+      if (!glyphs) return "";
+
+      let value = "";
+      for (let index = 0; index < glyphs.length; index += 1) {
+        const whitelist = index === 0 ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789";
+        const text = await recognizeAlphaNumeric(
+          worker,
+          padCanvas(glyphs[index], 0.28, 255),
+          "10",
+          whitelist
+        );
+        const match = index === 0 ? text.match(/[A-Z]/) : text.match(/[0-9]/);
+        if (!match) return "";
+        value += match[0];
+      }
+
+      if (!/^[A-Z][0-9]{7}$/.test(value)) return "";
+      return value === expectedValue ? expectedValue : value;
+    }
+
+    function segmentGlyphCanvases(canvas, expectedCount) {
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const { width, height } = canvas;
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const usableRows = new Uint8Array(height);
+      let usableRowCount = 0;
+
+      // 横罫線はほぼ全幅が黒くなるため、文字分割の計算から除外する。
+      for (let y = 0; y < height; y += 1) {
+        let dark = 0;
+        for (let x = 0; x < width; x += 1) {
+          const index = (y * width + x) * 4;
+          if (pixels[index] < 128) dark += 1;
+        }
+        const density = dark / width;
+        if (density >= 0.01 && density < 0.72) {
+          usableRows[y] = 1;
+          usableRowCount += 1;
+        }
+      }
+      if (usableRowCount < Math.max(5, height * 0.08)) return null;
+
+      const columnDensity = [];
+
+      for (let x = 0; x < width; x += 1) {
+        let dark = 0;
+        for (let y = 0; y < height; y += 1) {
+          if (!usableRows[y]) continue;
+          const index = (y * width + x) * 4;
+          if (pixels[index] < 128) dark += 1;
+        }
+        columnDensity.push(dark / usableRowCount);
+      }
+
+      let runs = findDenseRuns(columnDensity, 0.08, 1)
+        .filter(run => {
+          const runWidth = run.end - run.start + 1;
+          return runWidth >= Math.max(3, height * 0.04) && runWidth <= height * 1.15;
+        });
+
+      if (runs.length > expectedCount) {
+        runs = [...runs]
+          .sort((a, b) => (b.end - b.start) - (a.end - a.start))
+          .slice(0, expectedCount)
+          .sort((a, b) => a.start - b.start);
+      }
+      if (runs.length !== expectedCount) return null;
+
+      return runs.map(run => {
+        let top = height;
+        let bottom = -1;
+        for (let x = run.start; x <= run.end; x += 1) {
+          for (let y = 0; y < height; y += 1) {
+            if (!usableRows[y]) continue;
+            const index = (y * width + x) * 4;
+            if (pixels[index] < 128) {
+              top = Math.min(top, y);
+              bottom = Math.max(bottom, y);
+            }
+          }
+        }
+        if (bottom < top) return cropCanvasRect(canvas, run.start, 0, run.end - run.start + 1, height);
+        const marginX = Math.max(2, Math.round((run.end - run.start + 1) * 0.12));
+        const marginY = Math.max(2, Math.round((bottom - top + 1) * 0.10));
+        const left = Math.max(0, run.start - marginX);
+        const right = Math.min(width, run.end + 1 + marginX);
+        const cropTop = Math.max(0, top - marginY);
+        const cropBottom = Math.min(height, bottom + 1 + marginY);
+        return cropCanvasRect(
+          canvas,
+          left,
+          cropTop,
+          right - left,
+          cropBottom - cropTop
+        );
+      });
+    }
+
     function pickCode(ocrText, type, expectedValue) {
       const tokens = String(ocrText).match(/[A-Z0-9]+/g) || [];
-      const joinedTokens = [...tokens];
+      const joinedTokens = [];
       const targetLength = type === "number" ? 4 : (type === "lot" ? 6 : 8);
 
       // 文字間隔が広い印字は「Q 025 4241」のように複数トークンへ分割される。
@@ -903,11 +1019,21 @@
         }
       }
       const candidates = [];
+      const directCandidates = [];
+      for (const token of tokens) {
+        const normalized = normalizeOcrToken(token, type);
+        if (normalized) {
+          candidates.push(normalized);
+          directCandidates.push(normalized);
+        }
+      }
       for (const token of joinedTokens) {
         const normalized = normalizeOcrToken(token, type);
         if (normalized) candidates.push(normalized);
       }
-      return candidates.includes(expectedValue) ? expectedValue : (candidates[0] || "");
+      // 分割トークンの連結は、QR値と完全一致した場合だけ採用する。
+      // 商品説明など別の数字をつないだ8文字をOCR結果として表示しない。
+      return candidates.includes(expectedValue) ? expectedValue : (directCandidates[0] || "");
     }
 
     function normalizeOcrToken(token, type) {
