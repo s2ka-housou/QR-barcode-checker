@@ -906,22 +906,73 @@
       const glyphs = segmentGlyphCanvases(binaryCanvas, 8);
       if (!glyphs) return "";
 
-      let value = "";
-      for (let index = 0; index < glyphs.length; index += 1) {
-        const whitelist = index === 0 ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789";
+      // 先頭英字は単独認識の方がQの尻尾を判別しやすい。
+      const firstText = await recognizeAlphaNumeric(
+        worker,
+        padCanvas(glyphs[0], 0.28, 255),
+        "10",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      );
+      const firstMatch = firstText.match(/[A-Z]/);
+      if (!firstMatch) return "";
+      const firstLetter = firstMatch[0];
+
+      // 数字は1文字ずつ読むより、7桁を連続した形で読む方が5/9などを区別しやすい。
+      const lineText = await recognizeAlphaNumeric(
+        worker,
+        padCanvas(binaryCanvas, 0.16, 255),
+        "7",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+      );
+      const suffixes = extractSevenDigitSuffixes(lineText);
+      const hybridCandidates = suffixes.map(suffix => firstLetter + suffix);
+      if (hybridCandidates.includes(expectedValue)) return expectedValue;
+      const hybridFallback = hybridCandidates[0] || "";
+
+      // 全体認識から7桁を得られない場合に限り、残りの数字も1文字ずつ読む。
+      let value = firstLetter;
+      for (let index = 1; index < glyphs.length; index += 1) {
         const text = await recognizeAlphaNumeric(
           worker,
           padCanvas(glyphs[index], 0.28, 255),
           "10",
-          whitelist
+          "0123456789"
         );
-        const match = index === 0 ? text.match(/[A-Z]/) : text.match(/[0-9]/);
-        if (!match) return "";
+        const match = text.match(/[0-9]/);
+        if (!match) return hybridFallback;
         value += match[0];
       }
 
-      if (!/^[A-Z][0-9]{7}$/.test(value)) return "";
+      if (!/^[A-Z][0-9]{7}$/.test(value)) return hybridFallback;
       return value === expectedValue ? expectedValue : value;
+    }
+
+    function extractSevenDigitSuffixes(ocrText) {
+      const digitMap = {
+        O: "0", Q: "0", I: "1", L: "1",
+        Z: "2", S: "5", G: "6", T: "7", B: "8"
+      };
+      const tokens = String(ocrText).match(/[A-Z0-9]+/g) || [];
+      const candidates = [...tokens];
+      const compact = tokens.join("");
+      if (compact) candidates.push(compact);
+
+      const suffixes = [];
+      for (const candidate of candidates) {
+        const rawSuffix = candidate.length === 8
+          ? candidate.slice(1)
+          : candidate.length === 7
+            ? candidate
+            : "";
+        if (!rawSuffix) continue;
+        const normalized = [...rawSuffix]
+          .map(character => digitMap[character] || character)
+          .join("");
+        if (/^[0-9]{7}$/.test(normalized) && !suffixes.includes(normalized)) {
+          suffixes.push(normalized);
+        }
+      }
+      return suffixes;
     }
 
     function segmentGlyphCanvases(canvas, expectedCount) {
