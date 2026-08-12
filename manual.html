@@ -68,6 +68,35 @@
       padding: 54px 0 48px;
     }
 
+    .hero-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 24px;
+    }
+
+    .back-to-app {
+      display: inline-flex;
+      min-height: 42px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 9px 16px;
+      border: 1px solid rgba(255,255,255,.42);
+      border-radius: 10px;
+      background: rgba(255,255,255,.14);
+      color: #fff;
+      font-weight: 750;
+      text-decoration: none;
+      backdrop-filter: blur(8px);
+    }
+
+    .back-to-app:hover { background: rgba(255,255,255,.22); }
+
+    .back-arrow {
+      font-size: 1.2em;
+      line-height: 1;
+    }
+
     .brand {
       display: flex;
       gap: 22px;
@@ -375,6 +404,7 @@
 
     @media (max-width: 760px) {
       .hero-inner { padding: 36px 0 34px; }
+      .hero-actions { margin-bottom: 18px; }
       .brand { align-items: flex-start; }
       .brand-icon { width: 72px; height: 72px; border-radius: 18px; }
       .hero-copy { font-size: .92rem; }
@@ -387,6 +417,7 @@
     @media print {
       body { background: #fff; }
       .hero { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .hero-actions { display: none; }
       .footer { display: none; }
       .page { width: 100%; padding: 12px 0; }
       .section { break-inside: avoid; box-shadow: none; }
@@ -398,6 +429,12 @@
 <body>
   <header class="hero">
     <div class="hero-inner">
+      <div class="hero-actions">
+        <a class="back-to-app" href="index.html">
+          <span class="back-arrow" aria-hidden="true">←</span>
+          アプリに戻る
+        </a>
+      </div>
       <div class="brand">
         <img class="brand-icon" src="manual-assets/app-icon.jpg" alt="コード照合アプリのアイコン">
         <div>
