@@ -883,8 +883,9 @@
       if (mfgLot !== qr.mfgLot) {
         const roughLotRegion = cropCanvasFraction(labelCanvas, 0.02, 0.04, 0.96, 0.54);
         const lotRegion = cropLightTextBounds(roughLotRegion) || roughLotRegion;
+        const lotBinary = prepareBinaryForOcr(lotRegion, true, 3);
         const lotVariants = [
-          padCanvas(prepareBinaryForOcr(lotRegion, true, 3), 0.16, 255),
+          padCanvas(lotBinary, 0.16, 255),
           padCanvas(prepareContrastForOcr(lotRegion, true, 2.7), 0.16, 255)
         ];
         let lotRetry = await recognizeCodeWithFallback(
@@ -905,6 +906,16 @@
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
           );
           if (lotWordRetry === qr.mfgLot || !lotRetry) lotRetry = lotWordRetry;
+        }
+        if (lotRetry !== qr.mfgLot) {
+          // BQ6820のような細い書体ではQをOなどへ誤読しやすいため、
+          // 先頭2文字を個別認識し、後半4桁は連続した数字として読む。
+          const segmentedLot = await recognizeSegmentedManufacturingLot(
+            worker,
+            lotBinary,
+            qr.mfgLot
+          );
+          if (segmentedLot === qr.mfgLot || !lotRetry) lotRetry = segmentedLot;
         }
         if (lotRetry === qr.mfgLot || !mfgLot) mfgLot = lotRetry;
       }
@@ -1025,6 +1036,81 @@
 
       if (!/^[A-Z][0-9]{7}$/.test(value)) return hybridFallback;
       return value === expectedValue ? expectedValue : value;
+    }
+
+    async function recognizeSegmentedManufacturingLot(worker, binaryCanvas, expectedValue) {
+      const glyphs = segmentGlyphCanvases(binaryCanvas, 6);
+      if (!glyphs) return "";
+
+      let prefix = "";
+      for (let index = 0; index < 2; index += 1) {
+        const text = await recognizeAlphaNumeric(
+          worker,
+          padCanvas(glyphs[index], 0.32, 255),
+          "10",
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
+        const match = text.match(/[A-Z]/);
+        if (!match) return "";
+        prefix += match[0];
+      }
+
+      // 数字4桁は一文字ずつ分離せず、形のつながりを残したまま読む。
+      const lineText = await recognizeAlphaNumeric(
+        worker,
+        padCanvas(binaryCanvas, 0.16, 255),
+        "7",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+      );
+      const suffixes = extractFourDigitSuffixes(lineText);
+      const hybridCandidates = suffixes.map(suffix => prefix + suffix);
+      if (hybridCandidates.includes(expectedValue)) return expectedValue;
+      const hybridFallback = hybridCandidates[0] || "";
+
+      // 連続認識で4桁を取得できない場合だけ、数字を個別に確認する。
+      let value = prefix;
+      for (let index = 2; index < glyphs.length; index += 1) {
+        const text = await recognizeAlphaNumeric(
+          worker,
+          padCanvas(glyphs[index], 0.28, 255),
+          "10",
+          "0123456789"
+        );
+        const match = text.match(/[0-9]/);
+        if (!match) return hybridFallback;
+        value += match[0];
+      }
+
+      if (!/^[A-Z]{2}[0-9]{4}$/.test(value)) return hybridFallback;
+      return value === expectedValue ? expectedValue : value;
+    }
+
+    function extractFourDigitSuffixes(ocrText) {
+      const digitMap = {
+        O: "0", Q: "0", I: "1", L: "1",
+        Z: "2", S: "5", G: "6", T: "7", B: "8"
+      };
+      const tokens = String(ocrText).match(/[A-Z0-9]+/g) || [];
+      const candidates = [...tokens];
+      const compact = tokens.join("");
+      if (compact) candidates.push(compact);
+
+      const suffixes = [];
+      for (const candidate of candidates) {
+        const rawSuffix = candidate.length === 6
+          ? candidate.slice(2)
+          : candidate.length === 4
+            ? candidate
+            : "";
+        if (!rawSuffix) continue;
+        const normalized = [...rawSuffix]
+          .map(character => digitMap[character] || character)
+          .join("");
+        if (/^[0-9]{4}$/.test(normalized) && !suffixes.includes(normalized)) {
+          suffixes.push(normalized);
+        }
+      }
+      return suffixes;
     }
 
     function extractSevenDigitSuffixes(ocrText) {
