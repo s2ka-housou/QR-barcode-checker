@@ -394,6 +394,8 @@
     };
 
     const MAX_IMAGE_DIMENSION = 3000;
+    const PROFILE_ENABLED = new URLSearchParams(window.location.search).has("profile");
+    window.__analysisProfile = [];
     const input = document.getElementById("photo-input");
     const preview = document.getElementById("preview");
     const previewWrap = document.getElementById("preview-wrap");
@@ -405,8 +407,15 @@
     let ocrData = null;
     let ocrWorker = null;
 
+    function profileRecord(label, startedAt) {
+      if (!PROFILE_ENABLED) return;
+      const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+      window.__analysisProfile.push({ label, durationMs });
+      console.info(`[PROFILE] ${label}: ${durationMs} ms`);
+    }
+
     function isStandaloneApp() {
-      return window.navigator.standalone === true ||
+      return PROFILE_ENABLED || window.navigator.standalone === true ||
         window.matchMedia("(display-mode: standalone)").matches;
     }
 
@@ -442,26 +451,35 @@
       }
 
       try {
+        window.__analysisProfile.length = 0;
+        const totalStartedAt = performance.now();
         clearResults();
         setBusy("画像を読み込んでいます…");
+        let stageStartedAt = performance.now();
         sourceCanvas = await fileToCanvas(file);
+        profileRecord("画像の読込・縮小", stageStartedAt);
         preview.src = sourceCanvas.toDataURL("image/jpeg", 0.88);
         previewWrap.style.display = "block";
 
         setBusy("写真全体からQRコードとITFを解析しています…");
         const wholeImage = canvasImageData(sourceCanvas);
+        stageStartedAt = performance.now();
         const wholeResults = await scanImage(wholeImage, ["QRCode", "ITF"], "全体画像・標準解析");
+        profileRecord("画像全体のQR・ITF解析", stageStartedAt);
         acceptResults(wholeResults);
 
         // 全体画像で不足したコードだけを、位置に合わせて強めの前処理で追加解析する。
         if (!qrData) {
+          stageStartedAt = performance.now();
           const qrImage = cropByLayout(sourceCanvas, LAYOUT.qr);
           const qrResults = await scanVariants(qrImage, ["QRCode"], "QR領域");
           acceptResults(qrResults);
+          profileRecord("QR領域の追加解析", stageStartedAt);
         }
 
         // 黒ラベルを検出できた場合は、QRがある右側だけを大きく拡大して再解析する。
         if (!qrData) {
+          stageStartedAt = performance.now();
           const darkLabel = findQrLabelPanel(sourceCanvas);
           if (darkLabel) {
             const qrCandidate = cropCanvasFraction(darkLabel, 0.40, 0, 0.60, 1);
@@ -473,18 +491,23 @@
             );
             acceptResults(focusedResults);
           }
+          profileRecord("黒ラベル内QRの追加解析", stageStartedAt);
         }
 
         if (!barcodeData) {
+          stageStartedAt = performance.now();
           const itfImage = cropByLayout(sourceCanvas, LAYOUT.itf);
           const itfResults = await scanVariants(itfImage, ["ITF"], "ITF領域");
           acceptResults(itfResults);
+          profileRecord("ITF領域の追加解析", stageStartedAt);
         }
 
         if (qrData) {
           try {
             setBusy("OCRで品番・製造ロット・ナンバリングを確認しています…");
+            stageStartedAt = performance.now();
             ocrData = await readOcrValues(sourceCanvas, qrData);
+            profileRecord("OCR処理全体", stageStartedAt);
           } catch (error) {
             console.warn("OCRを実行できませんでした。", error);
             ocrData = null;
@@ -492,6 +515,7 @@
         }
 
         renderResults();
+        profileRecord("全処理", totalStartedAt);
       } catch (error) {
         console.error(error);
         setStatus("画像を解析できませんでした。別の写真で試してください。", "ng");
@@ -686,7 +710,10 @@
 
     async function readOcrValues(canvas, qrResult) {
       const qr = parseQRCode(qrResult.text);
+      const workerStartedAt = performance.now();
       const worker = await getOcrWorker();
+      profileRecord("OCRエンジン準備", workerStartedAt);
+      const partStartedAt = performance.now();
 
       // 品番はQRより上側だけを対象にする。位置は固定せず、背景の明暗を両方試す。
       const hasOriginalQrPosition = qrResult.method.startsWith("全体画像");
@@ -703,27 +730,40 @@
               Math.max(1, Math.floor(detectedLabelTop - canvas.height * 0.02))
             )
           : canvas;
-      // 黒い品番ラベルを検出できた場合は、その部分だけを1行として先に読む。
-      // 広い範囲をPSM 11で読むより、Q/Sなど輪郭の近い文字を区別しやすい。
+
+      // 白地・段ボール地の品番を、加工なしの広域OCRで最初に1回だけ確認する。
+      // ここでQRの品番と一致すれば、黒背景用の複数回OCRは実行しない。
+      let partNo = await recognizeCodeWithFallback(
+        worker,
+        [upscaleCanvas(partRegion, 1.15)],
+        "11",
+        "part",
+        qr.partNo,
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+      );
+
+      // 広域OCRで一致しなかった場合だけ、黒い品番ラベルを専用処理する。
+      // 4種類の画像加工×3種類の認識モードは、黒背景品番の精度維持のため残す。
       const darkPartPanels = [];
-      for (const threshold of [92, 130]) {
-        const candidate = findDarkTextPanel(partRegion, threshold);
-        if (!candidate || !isMostlyDarkCanvas(candidate)) continue;
-        const duplicate = darkPartPanels.some(entry =>
-          entry.panel.sourceRect && candidate.sourceRect &&
-          Math.abs(entry.panel.sourceRect.left - candidate.sourceRect.left) < 8 &&
-          Math.abs(entry.panel.sourceRect.top - candidate.sourceRect.top) < 8 &&
-          Math.abs(entry.panel.sourceRect.width - candidate.sourceRect.width) < 12 &&
-          Math.abs(entry.panel.sourceRect.height - candidate.sourceRect.height) < 12
-        );
-        if (!duplicate) {
-          darkPartPanels.push({
-            panel: candidate,
-            lightThreshold: threshold === 92 ? 118 : 145
-          });
+      if (partNo !== qr.partNo) {
+        for (const threshold of [92, 130]) {
+          const candidate = findDarkTextPanel(partRegion, threshold);
+          if (!candidate || !isMostlyDarkCanvas(candidate)) continue;
+          const duplicate = darkPartPanels.some(entry =>
+            entry.panel.sourceRect && candidate.sourceRect &&
+            Math.abs(entry.panel.sourceRect.left - candidate.sourceRect.left) < 8 &&
+            Math.abs(entry.panel.sourceRect.top - candidate.sourceRect.top) < 8 &&
+            Math.abs(entry.panel.sourceRect.width - candidate.sourceRect.width) < 12 &&
+            Math.abs(entry.panel.sourceRect.height - candidate.sourceRect.height) < 12
+          );
+          if (!duplicate) {
+            darkPartPanels.push({
+              panel: candidate,
+              lightThreshold: threshold === 92 ? 118 : 145
+            });
+          }
         }
       }
-      let partNo = "";
       for (const { panel: darkPartPanel, lightThreshold } of darkPartPanels) {
         const tightPartPanel = cropLightTextBounds(darkPartPanel, lightThreshold) || darkPartPanel;
         const darkPartScale = ocrScaleForLine(tightPartPanel, 135);
@@ -774,10 +814,9 @@
         if (partNo === qr.partNo) break;
       }
 
-      // 黒ラベルがない箱や、専用切出しで一致しない場合は従来の広域解析を試す。
+      // 最初の広域OCRと黒背景専用処理で一致しない場合だけ、補正した広域画像を試す。
       if (partNo !== qr.partNo) {
         const broadPart = await recognizeCodeWithFallback(worker, [
-          upscaleCanvas(partRegion, 1.15),
           prepareContrastForOcr(partRegion, false, 1),
           prepareContrastForOcr(partRegion, true, 1),
           prepareBinaryForOcr(partRegion, false, 1.35),
@@ -846,6 +885,8 @@
         if (wholeImagePart === qr.partNo || !partNo) partNo = wholeImagePart;
       }
 
+      profileRecord("OCR：品番", partStartedAt);
+
       // 黒ラベルはQRの左側を切り出し、製造ロットとナンバリングを別々の1行として読む。
       const labelCanvas = hasOriginalQrPosition
         ? cropLeftOfQr(canvas, qrResult.position)
@@ -857,6 +898,7 @@
       }
 
       // まず黒ラベル全体を2行のブロックとして読む。前版で読めていた経路を優先する。
+      const labelBlockStartedAt = performance.now();
       let labelText = await recognizeAlphaNumeric(
         worker,
         upscaleCanvas(labelCanvas, 2),
@@ -878,9 +920,11 @@
         mfgLot = pickCode(labelText, "lot", qr.mfgLot);
         numbering = pickCode(labelText, "number", qr.numbering);
       }
+      profileRecord("OCR：黒ラベル2行の一括認識", labelBlockStartedAt);
 
       // まだ一致しない項目だけ、上下を分けて1行モードで再試行する。
       if (mfgLot !== qr.mfgLot) {
+        const lotStartedAt = performance.now();
         const roughLotRegion = cropCanvasFraction(labelCanvas, 0.02, 0.04, 0.96, 0.54);
         const lotRegion = cropLightTextBounds(roughLotRegion) || roughLotRegion;
         const lotBinary = prepareBinaryForOcr(lotRegion, true, 3);
@@ -918,9 +962,11 @@
           if (segmentedLot === qr.mfgLot || !lotRetry) lotRetry = segmentedLot;
         }
         if (lotRetry === qr.mfgLot || !mfgLot) mfgLot = lotRetry;
+        profileRecord("OCR：製造ロット再試行", lotStartedAt);
       }
 
       if (numbering !== qr.numbering) {
+        const numberingStartedAt = performance.now();
         const roughNumberRegion = cropCanvasFraction(labelCanvas, 0.05, 0.42, 0.90, 0.55);
         const numberRegion = cropLightTextBounds(roughNumberRegion) || roughNumberRegion;
         const numberVariants = [
@@ -947,6 +993,7 @@
           if (numberWordRetry === qr.numbering || !numberRetry) numberRetry = numberWordRetry;
         }
         if (numberRetry === qr.numbering || !numbering) numbering = numberRetry;
+        profileRecord("OCR：ナンバリング再試行", numberingStartedAt);
       }
 
       return {
@@ -975,10 +1022,16 @@
     }
 
     async function recognizeAlphaNumeric(worker, canvas, pageSegMode, whitelist) {
+      const recognitionStartedAt = performance.now();
       const { data } = await worker.recognize(canvas, {
         tessedit_pageseg_mode: pageSegMode,
         tessedit_char_whitelist: whitelist
       });
+      const characterSet = whitelist === "0123456789" ? "数字" : "英数字";
+      profileRecord(
+        `Tesseract：PSM ${pageSegMode}・${characterSet}・${canvas.width}×${canvas.height}`,
+        recognitionStartedAt
+      );
       return String(data.text || "").toUpperCase().replace(/[^A-Z0-9]/g, " ");
     }
 
