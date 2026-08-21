@@ -1313,8 +1313,11 @@
       const digitMap = { O: "0", Q: "0", I: "1", L: "1", Z: "2", S: "5", G: "6", T: "7", B: "8" };
       const toDigits = value => [...value].map(char => digitMap[char] || char).join("");
 
-      if (type === "part" && token.length === 8 && /^[A-Z]/.test(token)) {
-        const value = token[0] + toDigits(token.slice(1));
+      if (type === "part" && token.length === 8 && /^[A-Z0-9]/.test(token)) {
+        // 品番の先頭は必ず英字。上線付きOはTesseractが0として読むことがあるため、
+        // 先頭位置に限って0をOへ補正する（後続7桁の0は数字のまま保持する）。
+        const firstLetter = token[0] === "0" ? "O" : token[0];
+        const value = firstLetter + toDigits(token.slice(1));
         return /^[A-Z][0-9]{7}$/.test(value) ? value : "";
       }
       if (type === "lot" && token.length === 6 && /^[A-Z]{2}/.test(token)) {
