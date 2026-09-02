@@ -1711,11 +1711,12 @@
     }
 
     function findQrLabelPanel(canvas) {
-      // 品番表示を避け、製造ロット・QRがある中央付近を広めに検索する。
+      // 品番表示を避けて画像の下側を検索する。検索下端を固定割合で
+      // 打ち切るとQRラベルが途中で欠けるため、画像下端まで含める。
       const searchLeft = Math.floor(canvas.width * 0.10);
       const searchTop = Math.floor(canvas.height * 0.28);
       const searchWidth = Math.ceil(canvas.width * 0.88);
-      const searchHeight = Math.ceil(canvas.height * 0.50);
+      const searchHeight = canvas.height - searchTop;
       const search = cropCanvasRect(
         canvas,
         searchLeft,
