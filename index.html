@@ -490,6 +490,36 @@
               "黒ラベル内QR"
             );
             acceptResults(focusedResults);
+
+            // QRが小さく、黒ラベル上の汚れで輪郭が途切れる画像向けの救済処理。
+            // 黒い余白を足してQRのクワイエットゾーンを確保し、拡大方法と
+            // ZXingの二値化方式を変えて再試行する。通常経路で読めた場合は実行しない。
+            if (!qrData) {
+              const rescueSettings = [
+                { scale: 4, smooth: false },
+                { scale: 5, smooth: true }
+              ];
+              for (const setting of rescueSettings) {
+                const enlarged = upscaleCanvas(qrCandidate, setting.scale, setting.smooth);
+                const padded = padCanvas(enlarged, 0.14, 0);
+                const rescueResults = await scanVariants(
+                  canvasImageData(padded),
+                  ["QRCode"],
+                  `黒ラベル内QR・余白付き${setting.scale}倍`
+                );
+                acceptResults(rescueResults);
+                if (qrData) break;
+
+                const histogramResults = await scanImage(
+                  canvasImageData(padded),
+                  ["QRCode"],
+                  `黒ラベル内QR・GlobalHistogram・${setting.scale}倍`,
+                  "GlobalHistogram"
+                );
+                acceptResults(histogramResults);
+                if (qrData) break;
+              }
+            }
           }
           profileRecord("黒ラベル内QRの追加解析", stageStartedAt);
         }
@@ -574,7 +604,7 @@
       return canvasImageData(cropped);
     }
 
-    async function scanImage(imageData, formats, method) {
+    async function scanImage(imageData, formats, method, binarizer = "LocalAverage") {
       try {
         const results = await window.ZXingWASM.readBarcodes(imageData, {
           formats,
@@ -583,7 +613,7 @@
           tryInvert: true,
           tryRotate: true,
           tryDenoise: true,
-          binarizer: "LocalAverage"
+          binarizer
         });
         return results.map(result => ({ ...result, method }));
       } catch (error) {
@@ -929,8 +959,17 @@
         const lotRegion = cropLightTextBounds(roughLotRegion) || roughLotRegion;
         const lotBinary = prepareBinaryForOcr(lotRegion, true, 3);
         const lotVariants = [
+          // 細い文字では輪郭検出による切り詰めで文字端が欠けることがあるため、
+          // 先に切り詰め前の上段領域をそのまま補正して読む。
+          padCanvas(prepareContrastForOcr(roughLotRegion, true, 3.4), 0.18, 255),
+          padCanvas(prepareBinaryForOcr(roughLotRegion, true, 3.4), 0.18, 255),
           padCanvas(lotBinary, 0.16, 255),
-          padCanvas(prepareContrastForOcr(lotRegion, true, 2.7), 0.16, 255)
+          padCanvas(prepareContrastForOcr(lotRegion, true, 2.7), 0.16, 255),
+          // 網点汚れや低コントラストでOtsuのしきい値がずれる場合に備え、
+          // 細い白文字を残しやすい固定しきい値も後段で試す。
+          padCanvas(prepareFixedBinaryForOcr(lotRegion, true, 3.2, 105), 0.18, 255),
+          padCanvas(prepareFixedBinaryForOcr(lotRegion, true, 3.2, 130), 0.18, 255),
+          padCanvas(prepareFixedBinaryForOcr(lotRegion, true, 3.2, 155), 0.18, 255)
         ];
         let lotRetry = await recognizeCodeWithFallback(
           worker,
@@ -1294,19 +1333,53 @@
       const candidates = [];
       const directCandidates = [];
       for (const token of tokens) {
-        const normalized = normalizeOcrToken(token, type);
-        if (normalized) {
+        const normalizedCandidates = normalizeOcrTokenCandidates(token, type);
+        for (const normalized of normalizedCandidates) {
           candidates.push(normalized);
           directCandidates.push(normalized);
         }
       }
       for (const token of joinedTokens) {
-        const normalized = normalizeOcrToken(token, type);
-        if (normalized) candidates.push(normalized);
+        candidates.push(...normalizeOcrTokenCandidates(token, type));
       }
       // 分割トークンの連結は、QR値と完全一致した場合だけ採用する。
       // 商品説明など別の数字をつないだ8文字をOCR結果として表示しない。
       return candidates.includes(expectedValue) ? expectedValue : (directCandidates[0] || "");
+    }
+
+    function normalizeOcrTokenCandidates(token, type) {
+      const candidates = [];
+      const primary = normalizeOcrToken(token, type);
+      if (primary) candidates.push(primary);
+
+      // 細い製造ロット書体では「BA6901」が「BAGYOT」のように読まれる。
+      // 後半4桁だけに限定して、Y=9 と T=7/1 の候補を展開する。
+      // 実際の採用はpickCode側でQR値との完全一致を要求する。
+      if (type === "lot" && token.length === 6 && /^[A-Z]{2}/.test(token)) {
+        const digitOptions = {
+          O: ["0"], Q: ["0"], I: ["1"], L: ["1"],
+          Z: ["2"], S: ["5"], G: ["6"], T: ["7", "1"],
+          B: ["8"], Y: ["9"]
+        };
+        let suffixes = [""];
+        for (const character of token.slice(2)) {
+          const options = /[0-9]/.test(character)
+            ? [character]
+            : (digitOptions[character] || []);
+          if (!options.length) {
+            suffixes = [];
+            break;
+          }
+          suffixes = suffixes.flatMap(prefix => options.map(option => prefix + option));
+        }
+        for (const suffix of suffixes) {
+          const value = token.slice(0, 2) + suffix;
+          if (/^[A-Z]{2}[0-9]{4}$/.test(value) && !candidates.includes(value)) {
+            candidates.push(value);
+          }
+        }
+      }
+      return candidates;
     }
 
     function normalizeOcrToken(token, type) {
