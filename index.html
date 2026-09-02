@@ -468,6 +468,21 @@
         profileRecord("画像全体のQR・ITF解析", stageStartedAt);
         acceptResults(wholeResults);
 
+        // 丸い白抜きセルをノイズと誤認して消さない全体画像の再試行。
+        // 標準解析でQRが読めた画像には追加コストを掛けない。
+        if (!qrData) {
+          stageStartedAt = performance.now();
+          const roundCellResults = await scanImage(
+            wholeImage,
+            ["QRCode"],
+            "全体画像・丸セル補正・ノイズ除去なし",
+            "LocalAverage",
+            { tryDenoise: false, tryDownscale: false }
+          );
+          acceptResults(roundCellResults);
+          profileRecord("全体画像の丸セルQR再解析", stageStartedAt);
+        }
+
         // 全体画像で不足したコードだけを、位置に合わせて強めの前処理で追加解析する。
         if (!qrData) {
           stageStartedAt = performance.now();
@@ -492,33 +507,27 @@
             acceptResults(focusedResults);
 
             // QRが小さく、黒ラベル上の汚れで輪郭が途切れる画像向けの救済処理。
-            // 黒い余白を足してQRのクワイエットゾーンを確保し、拡大方法と
-            // ZXingの二値化方式を変えて再試行する。通常経路で読めた場合は実行しない。
+            // まず最近傍拡大でセルの輪郭を保ったまま再試行する。
             if (!qrData) {
-              const rescueSettings = [
-                { scale: 4, smooth: false },
-                { scale: 5, smooth: true }
-              ];
-              for (const setting of rescueSettings) {
-                const enlarged = upscaleCanvas(qrCandidate, setting.scale, setting.smooth);
-                const padded = padCanvas(enlarged, 0.14, 0);
-                const rescueResults = await scanVariants(
-                  canvasImageData(padded),
-                  ["QRCode"],
-                  `黒ラベル内QR・余白付き${setting.scale}倍`
-                );
-                acceptResults(rescueResults);
-                if (qrData) break;
+              const enlarged = upscaleCanvas(qrCandidate, 4, false);
+              const padded = padCanvas(enlarged, 0.14, 0);
+              const rescueResults = await scanVariants(
+                canvasImageData(padded),
+                ["QRCode"],
+                "黒ラベル内QR・最近傍4倍"
+              );
+              acceptResults(rescueResults);
 
+              if (!qrData) {
                 const histogramResults = await scanImage(
                   canvasImageData(padded),
                   ["QRCode"],
-                  `黒ラベル内QR・GlobalHistogram・${setting.scale}倍`,
+                  "黒ラベル内QR・GlobalHistogram・最近傍4倍",
                   "GlobalHistogram"
                 );
                 acceptResults(histogramResults);
-                if (qrData) break;
               }
+
             }
           }
           profileRecord("黒ラベル内QRの追加解析", stageStartedAt);
@@ -604,7 +613,7 @@
       return canvasImageData(cropped);
     }
 
-    async function scanImage(imageData, formats, method, binarizer = "LocalAverage") {
+    async function scanImage(imageData, formats, method, binarizer = "LocalAverage", overrides = {}) {
       try {
         const results = await window.ZXingWASM.readBarcodes(imageData, {
           formats,
@@ -613,7 +622,8 @@
           tryInvert: true,
           tryRotate: true,
           tryDenoise: true,
-          binarizer
+          binarizer,
+          ...overrides
         });
         return results.map(result => ({ ...result, method }));
       } catch (error) {
