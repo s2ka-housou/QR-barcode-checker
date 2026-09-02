@@ -1158,6 +1158,11 @@
         const lotRegion = cropLightTextBounds(roughLotRegion) || roughLotRegion;
         const lotBinary = prepareBinaryForOcr(lotRegion, true, 3);
         const lotVariants = [
+          // コントラスト強調をせず、薄い白文字を残す方向へ閾値を段階的に下げる。
+          padCanvas(prepareLightTextBinaryForOcr(roughLotRegion, 3.4, 0), 0.18, 255),
+          padCanvas(prepareLightTextBinaryForOcr(roughLotRegion, 3.4, -10), 0.18, 255),
+          padCanvas(prepareLightTextBinaryForOcr(roughLotRegion, 3.4, -20), 0.18, 255),
+          padCanvas(prepareLightTextBinaryForOcr(roughLotRegion, 3.4, -30), 0.18, 255),
           // 細い文字では輪郭検出による切り詰めで文字端が欠けることがあるため、
           // 先に切り詰め前の上段領域をそのまま補正して読む。
           padCanvas(prepareContrastForOcr(roughLotRegion, true, 3.4), 0.18, 255),
@@ -1208,6 +1213,11 @@
         const roughNumberRegion = cropCanvasFraction(labelCanvas, 0.05, 0.42, 0.90, 0.55);
         const numberRegion = cropLightTextBounds(roughNumberRegion) || roughNumberRegion;
         const numberVariants = [
+          // ナンバリングも無強調の二値化を優先し、薄い線を残す閾値を順番に試す。
+          padCanvas(prepareLightTextBinaryForOcr(roughNumberRegion, 3.2, 0), 0.18, 255),
+          padCanvas(prepareLightTextBinaryForOcr(roughNumberRegion, 3.2, -10), 0.18, 255),
+          padCanvas(prepareLightTextBinaryForOcr(roughNumberRegion, 3.2, -20), 0.18, 255),
+          padCanvas(prepareLightTextBinaryForOcr(roughNumberRegion, 3.2, -30), 0.18, 255),
           padCanvas(prepareBinaryForOcr(numberRegion, true, 3.2), 0.18, 255),
           padCanvas(prepareContrastForOcr(numberRegion, true, 2.8), 0.18, 255)
         ];
@@ -1974,6 +1984,15 @@
       context.imageSmoothingEnabled = smooth;
       if (smooth) context.imageSmoothingQuality = "high";
       context.drawImage(canvas, 0, 0, output.width, output.height);
+      return output;
+    }
+
+    function prepareLightTextBinaryForOcr(canvas, scale, thresholdOffset) {
+      const output = upscaleCanvas(canvas, scale, false);
+      const context = output.getContext("2d", { willReadFrequently: true });
+      const source = context.getImageData(0, 0, output.width, output.height);
+      const binary = binarizeLightOnDark(source, thresholdOffset);
+      context.putImageData(binary, 0, 0);
       return output;
     }
 
