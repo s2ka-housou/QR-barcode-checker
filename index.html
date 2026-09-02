@@ -483,6 +483,63 @@
           profileRecord("全体画像の丸セルQR再解析", stageStartedAt);
         }
 
+        // 固定位置より先に黒ベタの製造ラベルを検出し、その右側のQRだけを解析する。
+        // 二値化はコントラスト強調を行わず、薄い白セルを残す方向へ閾値を下げて試す。
+        if (!qrData) {
+          stageStartedAt = performance.now();
+          const detectedLabel = findQrLabelPanel(sourceCanvas);
+          if (detectedLabel) {
+            const qrCandidate = cropCanvasFraction(detectedLabel, 0.42, 0, 0.58, 1);
+            const candidateScale = clamp(
+              1200 / Math.max(qrCandidate.width, qrCandidate.height),
+              1,
+              4
+            );
+            const enlargedCandidate = upscaleCanvas(qrCandidate, candidateScale, false);
+            const candidateImage = canvasImageData(enlargedCandidate);
+
+            const rawResults = await scanImage(
+              candidateImage,
+              ["QRCode"],
+              "黒ベタ検出QR・無加工",
+              "LocalAverage",
+              { tryDenoise: false, tryDownscale: false }
+            );
+            acceptResults(rawResults);
+
+            let leastRestrictiveBinary = null;
+            if (!qrData) {
+              for (const thresholdOffset of [0, -10, -20]) {
+                const thresholded = binarizeLightOnDark(candidateImage, thresholdOffset);
+                if (thresholdOffset === -20) leastRestrictiveBinary = thresholded;
+                const thresholdResults = await scanImage(
+                  thresholded,
+                  ["QRCode"],
+                  `黒ベタ検出QR・閾値${thresholdOffset}`,
+                  "LocalAverage",
+                  { tryDenoise: false, tryDownscale: false, tryInvert: false }
+                );
+                acceptResults(thresholdResults);
+                if (qrData) break;
+              }
+            }
+
+            // 閾値を下げても読めない場合だけ、情報を最も多く残した画像を1px膨張する。
+            if (!qrData && leastRestrictiveBinary) {
+              const expanded = expandDarkPixelsSquare(leastRestrictiveBinary, 1);
+              const expandedResults = await scanImage(
+                expanded,
+                ["QRCode"],
+                "黒ベタ検出QR・閾値-20・四角形膨張",
+                "LocalAverage",
+                { tryDenoise: false, tryDownscale: false, tryInvert: false }
+              );
+              acceptResults(expandedResults);
+            }
+          }
+          profileRecord("黒ベタ検出QRの追加解析", stageStartedAt);
+        }
+
         // 全体画像で不足したコードだけを、位置に合わせて強めの前処理で追加解析する。
         if (!qrData) {
           stageStartedAt = performance.now();
@@ -763,6 +820,36 @@
         data[i + 2] = value;
       }
       return contrastImage;
+    }
+
+    function binarizeLightOnDark(imageData, thresholdOffset = 0) {
+      const output = new ImageData(imageData.width, imageData.height);
+      const source = imageData.data;
+      const target = output.data;
+      const histogram = new Uint32Array(256);
+      const grayscale = new Uint8Array(imageData.width * imageData.height);
+
+      for (let index = 0, pixel = 0; index < source.length; index += 4, pixel += 1) {
+        const gray = Math.round(
+          0.299 * source[index] +
+          0.587 * source[index + 1] +
+          0.114 * source[index + 2]
+        );
+        grayscale[pixel] = gray;
+        histogram[gray] += 1;
+      }
+
+      const baseThreshold = otsuThreshold(histogram, grayscale.length);
+      const threshold = clamp(baseThreshold + thresholdOffset, 0, 255);
+      for (let index = 0, pixel = 0; index < target.length; index += 4, pixel += 1) {
+        // 黒背景は白へ、閾値以上の白い印字セルは黒へ変換する。
+        const value = grayscale[pixel] >= threshold ? 0 : 255;
+        target[index] = value;
+        target[index + 1] = value;
+        target[index + 2] = value;
+        target[index + 3] = 255;
+      }
+      return output;
     }
 
     function upscaleImageDataNearest(imageData, scale) {
