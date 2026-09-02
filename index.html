@@ -514,6 +514,32 @@
               );
               acceptResults(histogramResults);
             }
+
+            // それでも読めない場合は4倍相当へ最近傍拡大し、元の白セルに
+            // 相当する黒セルを3×3の四角形で1pxだけ膨張して再解析する。
+            if (!qrData) {
+              const enlargedDots = upscaleImageDataNearest(preservedDots, 2);
+              const squaredDots = expandDarkPixelsSquare(enlargedDots, 1);
+              const squaredResults = await scanImage(
+                squaredDots,
+                ["QRCode"],
+                "QR領域・白セル四角形膨張",
+                "LocalAverage",
+                { tryDenoise: false, tryDownscale: false, tryInvert: false }
+              );
+              acceptResults(squaredResults);
+
+              if (!qrData) {
+                const squaredHistogramResults = await scanImage(
+                  squaredDots,
+                  ["QRCode"],
+                  "QR領域・白セル四角形膨張・GlobalHistogram",
+                  "GlobalHistogram",
+                  { tryDenoise: false, tryDownscale: false, tryInvert: false }
+                );
+                acceptResults(squaredHistogramResults);
+              }
+            }
           }
           profileRecord("QR領域の追加解析", stageStartedAt);
         }
@@ -737,6 +763,56 @@
         data[i + 2] = value;
       }
       return contrastImage;
+    }
+
+    function upscaleImageDataNearest(imageData, scale) {
+      const source = document.createElement("canvas");
+      source.width = imageData.width;
+      source.height = imageData.height;
+      source.getContext("2d", { willReadFrequently: true }).putImageData(imageData, 0, 0);
+
+      const output = document.createElement("canvas");
+      output.width = Math.round(imageData.width * scale);
+      output.height = Math.round(imageData.height * scale);
+      const context = output.getContext("2d", { willReadFrequently: true });
+      context.imageSmoothingEnabled = false;
+      context.drawImage(source, 0, 0, output.width, output.height);
+      return context.getImageData(0, 0, output.width, output.height);
+    }
+
+    function expandDarkPixelsSquare(imageData, radius = 1) {
+      const output = new ImageData(imageData.width, imageData.height);
+      const source = imageData.data;
+      const target = output.data;
+      const { width, height } = imageData;
+
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          let dark = false;
+          const top = Math.max(0, y - radius);
+          const bottom = Math.min(height - 1, y + radius);
+          const left = Math.max(0, x - radius);
+          const right = Math.min(width - 1, x + radius);
+
+          for (let neighborY = top; neighborY <= bottom && !dark; neighborY += 1) {
+            const row = neighborY * width;
+            for (let neighborX = left; neighborX <= right; neighborX += 1) {
+              if (source[(row + neighborX) * 4] < 128) {
+                dark = true;
+                break;
+              }
+            }
+          }
+
+          const index = (y * width + x) * 4;
+          const value = dark ? 0 : 255;
+          target[index] = value;
+          target[index + 1] = value;
+          target[index + 2] = value;
+          target[index + 3] = 255;
+        }
+      }
+      return output;
     }
 
     function clamp(value, min, max) {
