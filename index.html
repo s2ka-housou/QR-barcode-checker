@@ -489,6 +489,32 @@
           const qrImage = cropByLayout(sourceCanvas, LAYOUT.qr);
           const qrResults = await scanVariants(qrImage, ["QRCode"], "QR領域");
           acceptResults(qrResults);
+
+          // 丸い白抜きセルのQR向け追加解析。
+          // 白い印字を黒セルへ明示的に反転してから、ノイズ除去と自動縮小を止める。
+          // QR領域だけを対象にするため、全体画像よりセル密度を保ちやすい。
+          if (!qrData) {
+            const preservedDots = binarizeOtsu(qrImage, true);
+            const preservedResults = await scanImage(
+              preservedDots,
+              ["QRCode"],
+              "QR領域・白抜きセル保護",
+              "LocalAverage",
+              { tryDenoise: false, tryDownscale: false, tryInvert: false }
+            );
+            acceptResults(preservedResults);
+
+            if (!qrData) {
+              const histogramResults = await scanImage(
+                preservedDots,
+                ["QRCode"],
+                "QR領域・白抜きセル保護・GlobalHistogram",
+                "GlobalHistogram",
+                { tryDenoise: false, tryDownscale: false, tryInvert: false }
+              );
+              acceptResults(histogramResults);
+            }
+          }
           profileRecord("QR領域の追加解析", stageStartedAt);
         }
 
