@@ -1151,16 +1151,24 @@
       }
       profileRecord("OCR：黒ラベル2行の一括認識", labelBlockStartedAt);
 
-      // 写真の距離や製品ごとの行間に追従するため、固定割合ではなく
-      // 明文字の横一列のまとまりから上下2行を検出する。
-      const detectedTextLines = findTwoLightTextLines(labelCanvas);
+      // 製造ロットは前版で読めていた広い上段範囲から先に確定する。
+      // ナンバリングは、その実測した下端より下だけを検索する。
+      const roughLotTop = Math.floor(labelCanvas.height * 0.04);
+      const roughLotRegion = cropCanvasFraction(labelCanvas, 0.02, 0.04, 0.96, 0.54);
+      const detectedLotRegion = cropLightTextBounds(roughLotRegion);
+      const lotRegion = detectedLotRegion || roughLotRegion;
+      const detectedLotBottom = detectedLotRegion?.sourceRect
+        ? roughLotTop + detectedLotRegion.sourceRect.top + detectedLotRegion.sourceRect.height
+        : Math.floor(labelCanvas.height * 0.50);
+      const numberingTop = clamp(
+        detectedLotBottom + Math.round(labelCanvas.height * 0.035),
+        Math.floor(labelCanvas.height * 0.43),
+        Math.floor(labelCanvas.height * 0.76)
+      );
 
       // まだ一致しない項目だけ、上下を分けて1行モードで再試行する。
       if (mfgLot !== qr.mfgLot) {
         const lotStartedAt = performance.now();
-        const fallbackLotRegion = cropCanvasFraction(labelCanvas, 0.02, 0.04, 0.96, 0.48);
-        const lotRegion = detectedTextLines?.lot ||
-          cropLightTextBounds(fallbackLotRegion) || fallbackLotRegion;
         const lotScale = ocrScaleForLine(lotRegion, 135);
         const lotBackground = padCanvas(
           prepareLightTextFeatureForOcr(lotRegion, lotScale, "background"),
@@ -1208,9 +1216,17 @@
 
       if (numbering !== qr.numbering) {
         const numberingStartedAt = performance.now();
-        const fallbackNumberRegion = cropCanvasFraction(labelCanvas, 0.05, 0.48, 0.90, 0.50);
-        const numberRegion = detectedTextLines?.numbering ||
-          cropLightTextBounds(fallbackNumberRegion) || fallbackNumberRegion;
+        const numberLeft = Math.floor(labelCanvas.width * 0.05);
+        const numberRight = Math.ceil(labelCanvas.width * 0.95);
+        const numberBottom = Math.ceil(labelCanvas.height * 0.98);
+        const roughNumberRegion = cropCanvasRect(
+          labelCanvas,
+          numberLeft,
+          numberingTop,
+          numberRight - numberLeft,
+          Math.max(1, numberBottom - numberingTop)
+        );
+        const numberRegion = cropLightTextBounds(roughNumberRegion) || roughNumberRegion;
         const numberScale = ocrScaleForLine(numberRegion, 135);
         const numberBackground = padCanvas(
           prepareLightTextFeatureForOcr(numberRegion, numberScale, "background"),
@@ -2079,13 +2095,20 @@
       const cropTop = Math.max(0, top - marginY);
       const cropRight = Math.min(width, right + marginX);
       const cropBottom = Math.min(height, bottom + marginY);
-      return cropCanvasRect(
+      const result = cropCanvasRect(
         canvas,
         cropLeft,
         cropTop,
         cropRight - cropLeft,
         cropBottom - cropTop
       );
+      result.sourceRect = {
+        left: cropLeft,
+        top: cropTop,
+        width: cropRight - cropLeft,
+        height: cropBottom - cropTop
+      };
+      return result;
     }
 
     function cropLeftOfQr(canvas, position) {
