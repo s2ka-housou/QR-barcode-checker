@@ -1151,11 +1151,16 @@
       }
       profileRecord("OCR：黒ラベル2行の一括認識", labelBlockStartedAt);
 
+      // 写真の距離や製品ごとの行間に追従するため、固定割合ではなく
+      // 明文字の横一列のまとまりから上下2行を検出する。
+      const detectedTextLines = findTwoLightTextLines(labelCanvas);
+
       // まだ一致しない項目だけ、上下を分けて1行モードで再試行する。
       if (mfgLot !== qr.mfgLot) {
         const lotStartedAt = performance.now();
-        const roughLotRegion = cropCanvasFraction(labelCanvas, 0.02, 0.04, 0.96, 0.54);
-        const lotRegion = cropLightTextBounds(roughLotRegion) || roughLotRegion;
+        const fallbackLotRegion = cropCanvasFraction(labelCanvas, 0.02, 0.04, 0.96, 0.48);
+        const lotRegion = detectedTextLines?.lot ||
+          cropLightTextBounds(fallbackLotRegion) || fallbackLotRegion;
         const lotScale = ocrScaleForLine(lotRegion, 135);
         const lotBackground = padCanvas(
           prepareLightTextFeatureForOcr(lotRegion, lotScale, "background"),
@@ -1203,8 +1208,9 @@
 
       if (numbering !== qr.numbering) {
         const numberingStartedAt = performance.now();
-        const roughNumberRegion = cropCanvasFraction(labelCanvas, 0.05, 0.42, 0.90, 0.55);
-        const numberRegion = cropLightTextBounds(roughNumberRegion) || roughNumberRegion;
+        const fallbackNumberRegion = cropCanvasFraction(labelCanvas, 0.05, 0.48, 0.90, 0.50);
+        const numberRegion = detectedTextLines?.numbering ||
+          cropLightTextBounds(fallbackNumberRegion) || fallbackNumberRegion;
         const numberScale = ocrScaleForLine(numberRegion, 135);
         const numberBackground = padCanvas(
           prepareLightTextFeatureForOcr(numberRegion, numberScale, "background"),
@@ -1887,6 +1893,78 @@
         48,
         135
       );
+    }
+
+    function findTwoLightTextLines(canvas) {
+      const width = canvas.width;
+      const height = canvas.height;
+      if (width < 30 || height < 30) return null;
+
+      const lightThreshold = estimateLightTextThreshold(canvas);
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const rowDensity = [];
+      for (let y = 0; y < height; y += 1) {
+        let light = 0;
+        for (let x = 0; x < width; x += 1) {
+          const index = (y * width + x) * 4;
+          const gray =
+            0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          if (gray > lightThreshold) light += 1;
+        }
+        rowDensity.push(light / width);
+      }
+
+      // 数ピクセルの欠けや傾きを吸収しつつ、行間の谷は残す。
+      const smoothRadius = Math.max(1, Math.round(height * 0.008));
+      const smoothed = rowDensity.map((_, index) => {
+        const top = Math.max(0, index - smoothRadius);
+        const bottom = Math.min(height - 1, index + smoothRadius);
+        return averageRange(rowDensity, top, bottom);
+      });
+      const peakDensity = Math.max(...smoothed);
+      if (peakDensity < 0.018) return null;
+      const densityThreshold = Math.max(0.014, peakDensity * 0.20);
+      const allowedGap = Math.max(1, Math.round(height * 0.012));
+      const runs = findDenseRuns(smoothed, densityThreshold, allowedGap)
+        .filter(run => {
+          const runHeight = run.end - run.start + 1;
+          return runHeight >= Math.max(4, height * 0.035) && runHeight <= height * 0.34;
+        })
+        .map(run => ({
+          ...run,
+          center: (run.start + run.end) / 2,
+          score: (run.end - run.start + 1) * averageRange(smoothed, run.start, run.end)
+        }));
+
+      let bestPair = null;
+      for (let first = 0; first < runs.length; first += 1) {
+        for (let second = first + 1; second < runs.length; second += 1) {
+          const upper = runs[first].center < runs[second].center ? runs[first] : runs[second];
+          const lower = upper === runs[first] ? runs[second] : runs[first];
+          const separation = (lower.center - upper.center) / height;
+          if (separation < 0.12 || separation > 0.68) continue;
+          const score = upper.score + lower.score;
+          if (!bestPair || score > bestPair.score) bestPair = { upper, lower, score };
+        }
+      }
+      if (!bestPair) return null;
+
+      const cropRun = run => {
+        const runHeight = run.end - run.start + 1;
+        const marginY = Math.max(4, Math.round(runHeight * 0.34));
+        const top = Math.max(0, run.start - marginY);
+        const bottom = Math.min(height, run.end + 1 + marginY);
+        const rough = cropCanvasRect(canvas, 0, top, width, bottom - top);
+        return cropLightTextBounds(rough, lightThreshold) || rough;
+      };
+
+      return {
+        lot: cropRun(bestPair.upper),
+        numbering: cropRun(bestPair.lower)
+      };
     }
 
     function findQrStartInDarkLabel(canvas, lightThreshold) {
