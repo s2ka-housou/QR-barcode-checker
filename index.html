@@ -1120,7 +1120,7 @@
       const labelCanvas = hasOriginalQrPosition
         ? cropLeftOfQr(canvas, qrResult.position)
         : detectedQrLabel
-          ? cropCanvasFraction(detectedQrLabel, 0.01, 0, 0.50, 1)
+          ? cropLabelTextBeforeQr(detectedQrLabel)
           : null;
       if (!labelCanvas) {
         return { partNo, mfgLot: "", numbering: "" };
@@ -1865,10 +1865,89 @@
       );
     }
 
-    function cropLightTextBounds(canvas, lightThreshold = 118) {
+    function estimateLightTextThreshold(canvas) {
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      const histogram = new Uint32Array(256);
+      const totalPixels = canvas.width * canvas.height;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const gray = clamp(Math.round(
+          0.299 * pixels[index] +
+          0.587 * pixels[index + 1] +
+          0.114 * pixels[index + 2]
+        ), 0, 255);
+        histogram[gray] += 1;
+      }
+
+      const background = histogramPercentile(histogram, totalPixels, 0.50);
+      const highlight = histogramPercentile(histogram, totalPixels, 0.95);
+      // 薄い印字では固定値118を下回るため、背景と明部の差からラベルごとに決める。
+      return clamp(
+        Math.round(background + Math.max(12, (highlight - background) * 0.36)),
+        48,
+        135
+      );
+    }
+
+    function findQrStartInDarkLabel(canvas, lightThreshold) {
+      const width = canvas.width;
+      const height = canvas.height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      const pixels = context.getImageData(0, 0, width, height).data;
+      const top = Math.floor(height * 0.06);
+      const bottom = Math.ceil(height * 0.94);
+      const startX = Math.floor(width * 0.44);
+      const endX = Math.ceil(width * 0.92);
+      const columnDensity = [];
+
+      for (let x = startX; x < endX; x += 1) {
+        let light = 0;
+        for (let y = top; y < bottom; y += 1) {
+          const index = (y * width + x) * 4;
+          const gray =
+            0.299 * pixels[index] +
+            0.587 * pixels[index + 1] +
+            0.114 * pixels[index + 2];
+          if (gray > lightThreshold) light += 1;
+        }
+        columnDensity.push(light / Math.max(1, bottom - top));
+      }
+
+      // QRは文字よりも、明暗が密集した列が横方向へ連続する。
+      const smoothRadius = Math.max(2, Math.round(width * 0.006));
+      const smoothed = columnDensity.map((_, index) => {
+        const left = Math.max(0, index - smoothRadius);
+        const right = Math.min(columnDensity.length - 1, index + smoothRadius);
+        return averageRange(columnDensity, left, right);
+      });
+      const runs = findDenseRuns(smoothed, 0.19, Math.max(1, Math.round(width * 0.004)))
+        .filter(run => run.end - run.start + 1 >= Math.max(8, width * 0.045));
+      if (!runs.length) return null;
+      return startX + runs[0].start;
+    }
+
+    function cropLabelTextBeforeQr(canvas) {
+      const lightThreshold = estimateLightTextThreshold(canvas);
+      const qrStart = findQrStartInDarkLabel(canvas, lightThreshold);
+      const left = Math.max(0, Math.floor(canvas.width * 0.01));
+      // QR検出に失敗した場合も50%で文字を切らず、通常レイアウトの余裕を確保する。
+      const right = qrStart == null
+        ? Math.ceil(canvas.width * 0.64)
+        : Math.max(
+            Math.ceil(canvas.width * 0.56),
+            Math.floor(qrStart - canvas.width * 0.012)
+          );
+      return cropCanvasRect(canvas, left, 0, Math.min(canvas.width, right) - left, canvas.height);
+    }
+
+    function cropLightTextBounds(canvas, lightThreshold = null) {
       const width = canvas.width;
       const height = canvas.height;
       if (width < 20 || height < 12) return null;
+
+      const resolvedLightThreshold = Number.isFinite(lightThreshold)
+        ? lightThreshold
+        : estimateLightTextThreshold(canvas);
 
       const context = canvas.getContext("2d", { willReadFrequently: true });
       const pixels = context.getImageData(0, 0, width, height).data;
@@ -1881,7 +1960,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray > lightThreshold) light += 1;
+          if (gray > resolvedLightThreshold) light += 1;
         }
         rowDensity.push(light / width);
       }
@@ -1905,7 +1984,7 @@
           const gray = 0.299 * pixels[index] +
             0.587 * pixels[index + 1] +
             0.114 * pixels[index + 2];
-          if (gray > lightThreshold) light += 1;
+          if (gray > resolvedLightThreshold) light += 1;
         }
         columnDensity.push(light / Math.max(1, bottom - top));
       }
