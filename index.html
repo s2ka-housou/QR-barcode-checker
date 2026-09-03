@@ -1156,24 +1156,27 @@
         const lotStartedAt = performance.now();
         const roughLotRegion = cropCanvasFraction(labelCanvas, 0.02, 0.04, 0.96, 0.54);
         const lotRegion = cropLightTextBounds(roughLotRegion) || roughLotRegion;
-        const lotBinary = prepareBinaryForOcr(lotRegion, true, 3);
+        const lotScale = ocrScaleForLine(lotRegion, 135);
+        const lotBackground = padCanvas(
+          prepareLightTextFeatureForOcr(lotRegion, lotScale, "background"),
+          0.18,
+          255
+        );
+        const lotCombined = padCanvas(
+          prepareLightTextFeatureForOcr(lotRegion, lotScale, "combined"),
+          0.18,
+          255
+        );
+        const lotBinary = padCanvas(
+          prepareLightTextFeatureForOcr(lotRegion, lotScale, "binary"),
+          0.18,
+          255
+        );
         const lotVariants = [
-          // コントラスト強調をせず、薄い白文字を残す方向へ閾値を段階的に下げる。
-          padCanvas(prepareLightTextBinaryForOcr(roughLotRegion, 3.4, 0), 0.18, 255),
-          padCanvas(prepareLightTextBinaryForOcr(roughLotRegion, 3.4, -10), 0.18, 255),
-          padCanvas(prepareLightTextBinaryForOcr(roughLotRegion, 3.4, -20), 0.18, 255),
-          padCanvas(prepareLightTextBinaryForOcr(roughLotRegion, 3.4, -30), 0.18, 255),
-          // 細い文字では輪郭検出による切り詰めで文字端が欠けることがあるため、
-          // 先に切り詰め前の上段領域をそのまま補正して読む。
-          padCanvas(prepareContrastForOcr(roughLotRegion, true, 3.4), 0.18, 255),
-          padCanvas(prepareBinaryForOcr(roughLotRegion, true, 3.4), 0.18, 255),
-          padCanvas(lotBinary, 0.16, 255),
-          padCanvas(prepareContrastForOcr(lotRegion, true, 2.7), 0.16, 255),
-          // 網点汚れや低コントラストでOtsuのしきい値がずれる場合に備え、
-          // 細い白文字を残しやすい固定しきい値も後段で試す。
-          padCanvas(prepareFixedBinaryForOcr(lotRegion, true, 3.2, 105), 0.18, 255),
-          padCanvas(prepareFixedBinaryForOcr(lotRegion, true, 3.2, 130), 0.18, 255),
-          padCanvas(prepareFixedBinaryForOcr(lotRegion, true, 3.2, 155), 0.18, 255)
+          // ③ 背景ムラ除去 → ⑤ 背景補正＋明文字抽出 → ⑥ 必要時だけ二値化。
+          lotBackground,
+          lotCombined,
+          lotBinary
         ];
         let lotRetry = await recognizeCodeWithFallback(
           worker,
@@ -1186,23 +1189,13 @@
         if (lotRetry !== qr.mfgLot) {
           const lotWordRetry = await recognizeCodeWithFallback(
             worker,
-            lotVariants,
+            [lotBinary],
             "8",
             "lot",
             qr.mfgLot,
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
           );
           if (lotWordRetry === qr.mfgLot || !lotRetry) lotRetry = lotWordRetry;
-        }
-        if (lotRetry !== qr.mfgLot) {
-          // BQ6820のような細い書体ではQをOなどへ誤読しやすいため、
-          // 先頭2文字を個別認識し、後半4桁は連続した数字として読む。
-          const segmentedLot = await recognizeSegmentedManufacturingLot(
-            worker,
-            lotBinary,
-            qr.mfgLot
-          );
-          if (segmentedLot === qr.mfgLot || !lotRetry) lotRetry = segmentedLot;
         }
         if (lotRetry === qr.mfgLot || !mfgLot) mfgLot = lotRetry;
         profileRecord("OCR：製造ロット再試行", lotStartedAt);
@@ -1212,14 +1205,26 @@
         const numberingStartedAt = performance.now();
         const roughNumberRegion = cropCanvasFraction(labelCanvas, 0.05, 0.42, 0.90, 0.55);
         const numberRegion = cropLightTextBounds(roughNumberRegion) || roughNumberRegion;
+        const numberScale = ocrScaleForLine(numberRegion, 135);
+        const numberBackground = padCanvas(
+          prepareLightTextFeatureForOcr(numberRegion, numberScale, "background"),
+          0.18,
+          255
+        );
+        const numberCombined = padCanvas(
+          prepareLightTextFeatureForOcr(numberRegion, numberScale, "combined"),
+          0.18,
+          255
+        );
+        const numberBinary = padCanvas(
+          prepareLightTextFeatureForOcr(numberRegion, numberScale, "binary"),
+          0.18,
+          255
+        );
         const numberVariants = [
-          // ナンバリングも無強調の二値化を優先し、薄い線を残す閾値を順番に試す。
-          padCanvas(prepareLightTextBinaryForOcr(roughNumberRegion, 3.2, 0), 0.18, 255),
-          padCanvas(prepareLightTextBinaryForOcr(roughNumberRegion, 3.2, -10), 0.18, 255),
-          padCanvas(prepareLightTextBinaryForOcr(roughNumberRegion, 3.2, -20), 0.18, 255),
-          padCanvas(prepareLightTextBinaryForOcr(roughNumberRegion, 3.2, -30), 0.18, 255),
-          padCanvas(prepareBinaryForOcr(numberRegion, true, 3.2), 0.18, 255),
-          padCanvas(prepareContrastForOcr(numberRegion, true, 2.8), 0.18, 255)
+          numberBackground,
+          numberCombined,
+          numberBinary
         ];
         let numberRetry = await recognizeCodeWithFallback(
           worker,
@@ -1232,7 +1237,7 @@
         if (numberRetry !== qr.numbering) {
           const numberWordRetry = await recognizeCodeWithFallback(
             worker,
-            numberVariants,
+            [numberBinary],
             "8",
             "number",
             qr.numbering,
@@ -1987,13 +1992,116 @@
       return output;
     }
 
-    function prepareLightTextBinaryForOcr(canvas, scale, thresholdOffset) {
-      const output = upscaleCanvas(canvas, scale, false);
+    function prepareLightTextFeatureForOcr(canvas, scale, mode) {
+      const output = upscaleCanvas(canvas, scale, scale < 1);
       const context = output.getContext("2d", { willReadFrequently: true });
-      const source = context.getImageData(0, 0, output.width, output.height);
-      const binary = binarizeLightOnDark(source, thresholdOffset);
-      context.putImageData(binary, 0, 0);
+      const image = context.getImageData(0, 0, output.width, output.height);
+      const data = image.data;
+      const pixelCount = output.width * output.height;
+      const grayscale = new Float32Array(pixelCount);
+
+      for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
+        grayscale[pixel] =
+          0.299 * data[index] +
+          0.587 * data[index + 1] +
+          0.114 * data[index + 2];
+      }
+
+      // 大きな近傍平均を印刷面の明るさとして差し引き、黒ラベルの照明ムラを平らにする。
+      const backgroundRadius = clamp(Math.round(output.height * 0.075), 6, 24);
+      const background = boxMeanGrayscale(
+        grayscale,
+        output.width,
+        output.height,
+        backgroundRadius
+      );
+
+      // 小さな近傍平均との差は、細い明文字を強調する軽量なトップハット近似として使う。
+      const detailRadius = clamp(Math.round(output.height * 0.018), 2, 7);
+      const detailBackground = mode === "background"
+        ? null
+        : boxMeanGrayscale(grayscale, output.width, output.height, detailRadius);
+      const feature = new Float32Array(pixelCount);
+      const featureHistogram = new Uint32Array(256);
+
+      for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+        const flattened = Math.max(0, grayscale[pixel] - background[pixel]);
+        const detail = detailBackground
+          ? Math.max(0, grayscale[pixel] - detailBackground[pixel])
+          : 0;
+        const value = mode === "background"
+          ? flattened
+          : flattened * 0.68 + detail * 0.32;
+        feature[pixel] = value;
+        featureHistogram[clamp(Math.round(value), 0, 255)] += 1;
+      }
+
+      // 上位0.5%の明るさを最大値として伸張し、少数の白いゴミへの引っ張られを抑える。
+      const high = Math.max(8, histogramPercentile(featureHistogram, pixelCount, 0.995));
+      const normalizedHistogram = new Uint32Array(256);
+      const normalized = new Uint8Array(pixelCount);
+      for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+        const value = clamp(Math.round(feature[pixel] * 255 / high), 0, 255);
+        normalized[pixel] = value;
+        normalizedHistogram[value] += 1;
+      }
+
+      const binaryThreshold = mode === "binary"
+        ? Math.max(18, otsuThreshold(normalizedHistogram, pixelCount) - 8)
+        : 0;
+      for (let index = 0, pixel = 0; index < data.length; index += 4, pixel += 1) {
+        const value = mode === "binary"
+          ? (normalized[pixel] >= binaryThreshold ? 0 : 255)
+          : 255 - normalized[pixel];
+        data[index] = value;
+        data[index + 1] = value;
+        data[index + 2] = value;
+        data[index + 3] = 255;
+      }
+      context.putImageData(image, 0, 0);
       return output;
+    }
+
+    function boxMeanGrayscale(values, width, height, radius) {
+      const stride = width + 1;
+      const integral = new Float64Array(stride * (height + 1));
+      for (let y = 0; y < height; y += 1) {
+        let rowTotal = 0;
+        const sourceRow = y * width;
+        const integralRow = (y + 1) * stride;
+        const previousRow = y * stride;
+        for (let x = 0; x < width; x += 1) {
+          rowTotal += values[sourceRow + x];
+          integral[integralRow + x + 1] = integral[previousRow + x + 1] + rowTotal;
+        }
+      }
+
+      const means = new Float32Array(width * height);
+      for (let y = 0; y < height; y += 1) {
+        const top = Math.max(0, y - radius);
+        const bottom = Math.min(height - 1, y + radius);
+        for (let x = 0; x < width; x += 1) {
+          const left = Math.max(0, x - radius);
+          const right = Math.min(width - 1, x + radius);
+          const sum =
+            integral[(bottom + 1) * stride + right + 1] -
+            integral[top * stride + right + 1] -
+            integral[(bottom + 1) * stride + left] +
+            integral[top * stride + left];
+          means[y * width + x] = sum / ((right - left + 1) * (bottom - top + 1));
+        }
+      }
+      return means;
+    }
+
+    function histogramPercentile(histogram, totalPixels, percentile) {
+      const target = Math.max(1, Math.ceil(totalPixels * percentile));
+      let cumulative = 0;
+      for (let value = 0; value < histogram.length; value += 1) {
+        cumulative += histogram[value];
+        if (cumulative >= target) return value;
+      }
+      return histogram.length - 1;
     }
 
     function prepareBinaryForOcr(canvas, invert, scale = 2) {
