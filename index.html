@@ -1226,27 +1226,34 @@
           numberRight - numberLeft,
           Math.max(1, numberBottom - numberingTop)
         );
-        const numberRegion = cropLightTextBounds(roughNumberRegion) || roughNumberRegion;
-        const numberScale = ocrScaleForLine(numberRegion, 135);
+        // Image (1).jpgでは、狭く切り詰める前の下段を高さ135pxへ調整した
+        // 無加工画像がTesseract 5.1.1で0001と読めるため、これを最初に試す。
+        const numberScale = ocrScaleForLine(roughNumberRegion, 135);
+        const numberRaw = padCanvas(
+          upscaleCanvas(roughNumberRegion, numberScale, numberScale < 1),
+          0.18,
+          255
+        );
+        const numberDirectBinary = padCanvas(
+          prepareDirectLightTextBinaryForOcr(roughNumberRegion, numberScale, 16),
+          0.18,
+          255
+        );
         const numberBackground = padCanvas(
-          prepareLightTextFeatureForOcr(numberRegion, numberScale, "background"),
+          prepareLightTextFeatureForOcr(roughNumberRegion, numberScale, "background"),
           0.18,
           255
         );
         const numberCombined = padCanvas(
-          prepareLightTextFeatureForOcr(numberRegion, numberScale, "combined"),
-          0.18,
-          255
-        );
-        const numberBinary = padCanvas(
-          prepareLightTextFeatureForOcr(numberRegion, numberScale, "binary"),
+          prepareLightTextFeatureForOcr(roughNumberRegion, numberScale, "combined"),
           0.18,
           255
         );
         const numberVariants = [
+          numberRaw,
+          numberDirectBinary,
           numberBackground,
-          numberCombined,
-          numberBinary
+          numberCombined
         ];
         let numberRetry = await recognizeCodeWithFallback(
           worker,
@@ -1259,7 +1266,7 @@
         if (numberRetry !== qr.numbering) {
           const numberWordRetry = await recognizeCodeWithFallback(
             worker,
-            [numberBinary],
+            [numberDirectBinary],
             "8",
             "number",
             qr.numbering,
@@ -2233,6 +2240,31 @@
         const value = mode === "binary"
           ? (normalized[pixel] >= binaryThreshold ? 0 : 255)
           : 255 - normalized[pixel];
+        data[index] = value;
+        data[index + 1] = value;
+        data[index + 2] = value;
+        data[index + 3] = 255;
+      }
+      context.putImageData(image, 0, 0);
+      return output;
+    }
+
+    function prepareDirectLightTextBinaryForOcr(canvas, scale, thresholdOffset = 16) {
+      const output = upscaleCanvas(canvas, scale, scale < 1);
+      const threshold = clamp(
+        estimateLightTextThreshold(output) + thresholdOffset,
+        55,
+        105
+      );
+      const context = output.getContext("2d", { willReadFrequently: true });
+      const image = context.getImageData(0, 0, output.width, output.height);
+      const data = image.data;
+      for (let index = 0; index < data.length; index += 4) {
+        const gray =
+          0.299 * data[index] +
+          0.587 * data[index + 1] +
+          0.114 * data[index + 2];
+        const value = gray >= threshold ? 0 : 255;
         data[index] = value;
         data[index + 1] = value;
         data[index + 2] = value;
