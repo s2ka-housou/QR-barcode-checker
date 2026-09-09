@@ -1058,15 +1058,18 @@
       // 罫線や商品説明を避けながら最も濃い文字行だけを読む。
       if (partNo !== qr.partNo && !darkPartPanels.length) {
         const horizontalRegions = [
-          cropCanvasFraction(partRegion, 0, 0, 0.40, 1),
-          cropCanvasFraction(partRegion, 0.22, 0, 0.60, 1),
-          cropCanvasFraction(partRegion, 0.55, 0, 0.45, 1)
+          // 右寄せの品番枠を左右とも欠かさず含める。Image (10)では従来の
+          // 中央領域は末尾、右領域は先頭Qを切っていたため、この範囲を先に試す。
+          { canvas: cropCanvasFraction(partRegion, 0.40, 0, 0.60, 1), targetHeight: 200 },
+          { canvas: cropCanvasFraction(partRegion, 0, 0, 0.40, 1), targetHeight: 125 },
+          { canvas: cropCanvasFraction(partRegion, 0.22, 0, 0.60, 1), targetHeight: 125 },
+          { canvas: cropCanvasFraction(partRegion, 0.55, 0, 0.45, 1), targetHeight: 125 }
         ];
 
-        for (const region of horizontalRegions) {
+        for (const { canvas: region, targetHeight } of horizontalRegions) {
           const textLine = cropDarkTextLineBounds(region);
           if (!textLine) continue;
-          const textLineScale = ocrScaleForLine(textLine, 125);
+          const textLineScale = ocrScaleForLine(textLine, targetHeight);
           const lineVariants = [
             padCanvas(prepareBinaryForOcr(textLine, false, textLineScale), 0.14, 255),
             padCanvas(prepareContrastForOcr(textLine, false, textLineScale), 0.14, 255)
@@ -1185,7 +1188,15 @@
           0.18,
           255
         );
+        const lotDirectBinary = padCanvas(
+          prepareDirectLightTextBinaryForOcr(lotRegion, lotScale, 16),
+          0.18,
+          255
+        );
         const lotVariants = [
+          // 薄い文字と縦汚れが重なる場合は、背景差分より直接二値化の方が
+          // 6の内側を保ちやすい。誤読時だけ追加される経路なので通常時は増えない。
+          lotDirectBinary,
           // ③ 背景ムラ除去 → ⑤ 背景補正＋明文字抽出 → ⑥ 必要時だけ二値化。
           lotBackground,
           lotCombined,
@@ -1273,6 +1284,26 @@
             "0123456789"
           );
           if (numberWordRetry === qr.numbering || !numberRetry) numberRetry = numberWordRetry;
+        }
+        if (numberRetry !== qr.numbering) {
+          // 縦汚れが強いラベルでは左側の余白が数字として混ざるため、
+          // 下段右側の実印字範囲に絞った直接二値化を最後に1回だけ試す。
+          const focusedNumberRegion = cropCanvasFraction(labelCanvas, 0.44, 0.44, 0.52, 0.32);
+          const focusedNumberScale = ocrScaleForLine(focusedNumberRegion, 180);
+          const focusedNumberBinary = padCanvas(
+            prepareDirectLightTextBinaryForOcr(focusedNumberRegion, focusedNumberScale, 16),
+            0.18,
+            255
+          );
+          const focusedNumberRetry = await recognizeCodeWithFallback(
+            worker,
+            [focusedNumberBinary],
+            "7",
+            "number",
+            qr.numbering,
+            "0123456789"
+          );
+          if (focusedNumberRetry === qr.numbering) numberRetry = focusedNumberRetry;
         }
         if (numberRetry === qr.numbering || !numbering) numbering = numberRetry;
         profileRecord("OCR：ナンバリング再試行", numberingStartedAt);
