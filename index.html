@@ -382,6 +382,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
+    <p class="note" style="text-align:center">更新版：2026-09-10</p>
   </main>
 
   <script>
@@ -1072,7 +1073,8 @@
           const textLineScale = ocrScaleForLine(textLine, targetHeight);
           const lineVariants = [
             padCanvas(prepareBinaryForOcr(textLine, false, textLineScale), 0.14, 255),
-            padCanvas(prepareContrastForOcr(textLine, false, textLineScale), 0.14, 255)
+            padCanvas(prepareContrastForOcr(textLine, false, textLineScale), 0.14, 255),
+            padCanvas(prepareBinaryForOcr(textLine, false, textLineScale, true), 0.14, 255)
           ];
           let linePart = await recognizeCodeWithFallback(
             worker,
@@ -1194,6 +1196,11 @@
           255
         );
         const lotVariants = [
+          // 細い書体は縮小で輪郭を失うため、切出し原寸も1行として確認する。
+          lotRegion,
+          padCanvas(removeSmallOcrSpecks(
+            prepareDirectLightTextBinaryForOcr(lotRegion, lotScale, 16, true)
+          ), 0.18, 255),
           // 薄い文字と縦汚れが重なる場合は、背景差分より直接二値化の方が
           // 6の内側を保ちやすい。誤読時だけ追加される経路なので通常時は増えない。
           lotDirectBinary,
@@ -1260,8 +1267,19 @@
           0.18,
           255
         );
+        const cleanNumberRegion = cropCanvasRect(
+          labelCanvas, numberLeft, numberingTop, numberRight - numberLeft,
+          Math.max(1, Math.floor(labelCanvas.height * 0.90) - numberingTop)
+        );
         const numberVariants = [
           numberRaw,
+          // ロットの実測下端から下を使い、ラベル最下部の縁と細かな汚れを除く。
+          // 上段文字が混ざった固定位置の切出しに依存しない。
+          padCanvas(removeSmallOcrSpecks(prepareDirectLightTextBinaryForOcr(
+            cleanNumberRegion,
+            ocrScaleForLine(cleanNumberRegion, 135),
+            16, true
+          )), 0.18, 255),
           numberDirectBinary,
           numberBackground,
           numberCombined
@@ -2182,6 +2200,45 @@
       return result;
     }
 
+    function removeSmallOcrSpecks(canvas) {
+      const image = canvasImageData(canvas);
+      const { width, height, data } = image;
+      const seen = new Uint8Array(width * height);
+      const queue = new Int32Array(width * height);
+      const minimumArea = Math.max(6, Math.round(height * height * 0.003));
+      for (let pixel = 0; pixel < seen.length; pixel++) {
+        if (seen[pixel] || data[pixel * 4] >= 128) continue;
+        let head = 0;
+        let tail = 1;
+        queue[0] = pixel;
+        seen[pixel] = 1;
+        while (head < tail) {
+          const current = queue[head++];
+          const x = current % width;
+          const y = Math.floor(current / width);
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            const next = ny * width + nx;
+            if (!seen[next] && data[next * 4] < 128) {
+              seen[next] = 1;
+              queue[tail++] = next;
+            }
+          }
+        }
+        if (tail < minimumArea) for (let i = 0; i < tail; i++) {
+          const offset = queue[i] * 4;
+          data[offset] = data[offset + 1] = data[offset + 2] = 255;
+        }
+      }
+      const output = document.createElement("canvas");
+      output.width = width;
+      output.height = height;
+      output.getContext("2d").putImageData(image, 0, 0);
+      return output;
+    }
+
     function padCanvas(canvas, fraction = 0.12, fill = 255) {
       const padding = Math.max(8, Math.round(Math.max(canvas.width, canvas.height) * fraction));
       const output = document.createElement("canvas");
@@ -2201,12 +2258,70 @@
 
     function upscaleCanvas(canvas, scale, smooth = true) {
       const output = document.createElement("canvas");
-      output.width = Math.round(canvas.width * scale);
-      output.height = Math.round(canvas.height * scale);
+      output.width = Math.max(1, Math.round(canvas.width * scale));
+      output.height = Math.max(1, Math.round(canvas.height * scale));
       const context = output.getContext("2d", { willReadFrequently: true });
       context.imageSmoothingEnabled = smooth;
       if (smooth) context.imageSmoothingQuality = "high";
       context.drawImage(canvas, 0, 0, output.width, output.height);
+      return output;
+    }
+
+    function resizeOcrCanvas(canvas, scale, smooth = true) {
+      const output = document.createElement("canvas");
+      output.width = Math.max(1, Math.round(canvas.width * scale));
+      output.height = Math.max(1, Math.round(canvas.height * scale));
+      const context = output.getContext("2d", { willReadFrequently: true });
+      // Canvasの高品質補間はエンジンごとに異なる。薄い印字の二値化に
+      // 影響するため、再試行用のOCR入力はLanczos補間で統一する。
+      if (output.width === canvas.width && output.height === canvas.height) {
+        context.drawImage(canvas, 0, 0);
+        return output;
+      }
+      const source = canvasImageData(canvas);
+      const result = context.createImageData(output.width, output.height);
+      const weights = (sourceSize, targetSize) => Array.from({ length: targetSize }, (_, index) => {
+        const ratio = sourceSize / targetSize;
+        if (!smooth) return [[Math.min(sourceSize - 1, Math.floor((index + 0.5) * ratio)), 1]];
+        const filterScale = Math.max(1, ratio);
+        const center = (index + 0.5) * ratio - 0.5;
+        const entries = [];
+        let total = 0;
+        for (let pos = Math.max(0, Math.ceil(center - 3 * filterScale)); pos <= Math.min(sourceSize - 1, Math.floor(center + 3 * filterScale)); pos++) {
+          const distance = Math.abs((pos - center) / filterScale);
+          const weight = distance < 1e-8 ? 1 : distance >= 3 ? 0 :
+            Math.sin(Math.PI * distance) * Math.sin(Math.PI * distance / 3) / (Math.PI * Math.PI * distance * distance / 3);
+          entries.push([pos, weight]);
+          total += weight;
+        }
+        return entries.map(([pos, weight]) => [pos, weight / total]);
+      });
+      const xWeights = weights(source.width, output.width);
+      const yWeights = weights(source.height, output.height);
+      // 行単位の中間バッファにして、iPhoneで大きなFloat配列を保持しない。
+      const row = new Float32Array(output.width * 4);
+      const horizontalRows = new Map();
+      for (let y = 0; y < output.height; y++) {
+        row.fill(0);
+        for (const [sy, wy] of yWeights[y]) {
+          if (!horizontalRows.has(sy)) {
+            const horizontal = new Float32Array(row.length);
+            for (let x = 0; x < output.width; x++) {
+              for (const [sx, wx] of xWeights[x]) {
+                const offset = (sy * source.width + sx) * 4;
+                for (let channel = 0; channel < 4; channel++) horizontal[x * 4 + channel] += source.data[offset + channel] * wx;
+              }
+            }
+            horizontalRows.set(sy, horizontal);
+          }
+          const horizontal = horizontalRows.get(sy);
+          for (let x = 0; x < row.length; x++) row[x] += horizontal[x] * wy;
+        }
+        for (let x = 0; x < row.length; x++) result.data[y * row.length + x] = Math.round(row[x]);
+        const nextTop = yWeights[y + 1]?.[0]?.[0] ?? source.height;
+        for (const sy of horizontalRows.keys()) if (sy < nextTop) horizontalRows.delete(sy);
+      }
+      context.putImageData(result, 0, 0);
       return output;
     }
 
@@ -2280,8 +2395,8 @@
       return output;
     }
 
-    function prepareDirectLightTextBinaryForOcr(canvas, scale, thresholdOffset = 16) {
-      const output = upscaleCanvas(canvas, scale, scale < 1);
+    function prepareDirectLightTextBinaryForOcr(canvas, scale, thresholdOffset = 16, stable = false) {
+      const output = (stable ? resizeOcrCanvas : upscaleCanvas)(canvas, scale, scale < 1);
       const threshold = clamp(
         estimateLightTextThreshold(output) + thresholdOffset,
         55,
@@ -2347,8 +2462,8 @@
       return histogram.length - 1;
     }
 
-    function prepareBinaryForOcr(canvas, invert, scale = 2) {
-      const output = upscaleCanvas(canvas, scale, scale < 1);
+    function prepareBinaryForOcr(canvas, invert, scale = 2, stable = false) {
+      const output = (stable ? resizeOcrCanvas : upscaleCanvas)(canvas, scale, scale < 1);
       const context = output.getContext("2d", { willReadFrequently: true });
       const image = context.getImageData(0, 0, output.width, output.height);
       const data = image.data;
