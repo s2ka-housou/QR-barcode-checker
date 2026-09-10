@@ -382,7 +382,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-09-10</p>
+    <p class="note" style="text-align:center">更新版：2026-09-10 r2</p>
   </main>
 
   <script>
@@ -971,6 +971,20 @@
         qr.partNo,
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
       );
+
+      // 枠線や商品説明が品番へ混ざる場合、同じ行の独立した8文字だけを読む。
+      // 候補の位置・文字数は画像から検出し、QRの期待文字列は検出に使用しない。
+      if (partNo !== qr.partNo) {
+        for (const line of findPrintedPartLines(partRegion)) {
+          const candidate = await recognizeCodeWithFallback(worker, [
+            padCanvas(prepareBinaryForOcr(line.isolated, false, ocrScaleForLine(line.isolated, 135), true), 0.12, 255),
+            padCanvas(prepareBinaryForOcr(line, false, ocrScaleForLine(line, 135), true), 0.12, 255),
+            padCanvas(prepareBinaryForOcr(line, false, ocrScaleForLine(line, 200), true), 0.12, 255)
+          ], "7", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+          if (candidate === qr.partNo) { partNo = candidate; break; }
+          if (!partNo && candidate) partNo = candidate;
+        }
+      }
 
       // 広域OCRで一致しなかった場合だけ、黒い品番ラベルを専用処理する。
       // 4種類の画像加工×3種類の認識モードは、黒背景品番の精度維持のため残す。
@@ -1873,6 +1887,84 @@
         }
       }
       return count > 0 && (dark / count >= 0.52 || total / count < 120);
+    }
+
+    function findPrintedPartLines(canvas) {
+      const { width, height, data } = canvasImageData(canvas);
+      const seen = new Uint8Array(width * height);
+      const queue = new Int32Array(width * height);
+      const glyphs = [];
+      const isInk = pixel => 0.299 * data[pixel * 4] +
+        0.587 * data[pixel * 4 + 1] + 0.114 * data[pixel * 4 + 2] < 100;
+      // 連結成分で文字を分ける。箱の罫線は大きな成分になるため除外できる。
+      for (let pixel = 0; pixel < seen.length; pixel++) {
+        if (seen[pixel] || !isInk(pixel)) continue;
+        let head = 0, tail = 1;
+        let left = pixel % width, right = left;
+        let top = Math.floor(pixel / width), bottom = top;
+        queue[0] = pixel; seen[pixel] = 1;
+        while (head < tail) {
+          const current = queue[head++];
+          const x = current % width, y = Math.floor(current / width);
+          left = Math.min(left, x); right = Math.max(right, x);
+          top = Math.min(top, y); bottom = Math.max(bottom, y);
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            const next = ny * width + nx;
+            if (!seen[next] && isInk(next)) { seen[next] = 1; queue[tail++] = next; }
+          }
+        }
+        const w = right - left + 1, h = bottom - top + 1;
+        if (h < Math.max(12, height * 0.025) || h > height * 0.30 ||
+            w < h * 0.12 || w > h * 1.25 || tail < w * h * 0.12) continue;
+        glyphs.push({ left, right, top, bottom, h, center: (top + bottom) / 2,
+          pixels: queue.slice(0, tail) });
+      }
+      glyphs.sort((a, b) => a.left - b.left);
+      const groups = [];
+      for (const seed of glyphs) {
+        const row = glyphs.filter(g => g.h >= seed.h * 0.72 && g.h <= seed.h * 1.38 &&
+          Math.abs(g.center - seed.center) <= seed.h * 0.22);
+        let run = [];
+        const finish = () => {
+          if (run.length !== 8) return;
+          const left = run[0].left, right = run[7].right;
+          const top = Math.min(...run.map(g => g.top)), bottom = Math.max(...run.map(g => g.bottom));
+          const h = bottom - top + 1;
+          if (right - left < h * 3 || right - left > h * 8) return;
+          if (groups.some(g => Math.abs(g.left - left) < h * 0.2 && Math.abs(g.top - top) < h * 0.2)) return;
+          groups.push({ left, right, top, bottom, h, glyphs: run.slice() });
+        };
+        for (const glyph of row) {
+          const previous = run[run.length - 1];
+          if (previous && (glyph.left <= previous.right || glyph.left - previous.right > seed.h * 0.65)) {
+            finish(); run = [];
+          }
+          run.push(glyph);
+        }
+        finish();
+      }
+      return groups.sort((a, b) => b.h - a.h).slice(0, 4).map(group => {
+        const margin = Math.max(2, Math.round(group.h * 0.045));
+        const left = Math.max(0, group.left - margin), top = Math.max(0, group.top - margin);
+        // 傾いた枠線が外接矩形へ入り込むため、検出した8文字の画素だけを残す。
+        const line = document.createElement("canvas");
+        line.width = Math.min(width, group.right + margin + 1) - left;
+        line.height = Math.min(height, group.bottom + margin + 1) - top;
+        const context = line.getContext("2d");
+        const image = context.createImageData(line.width, line.height);
+        image.data.fill(255);
+        for (const glyph of group.glyphs) for (const pixel of glyph.pixels) {
+          const offset = ((Math.floor(pixel / width) - top) * line.width + pixel % width - left) * 4;
+          image.data[offset] = image.data[offset + 1] = image.data[offset + 2] = 0;
+        }
+        context.putImageData(image, 0, 0);
+        const original = cropCanvasRect(canvas, left, top, line.width, line.height);
+        original.sourceRect = { left, top, width: line.width, height: line.height };
+        original.isolated = line;
+        return original;
+      });
     }
 
     function cropDarkTextLineBounds(canvas) {
