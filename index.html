@@ -382,7 +382,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-10-01 r3</p>
+    <p class="note" style="text-align:center">更新版：2026-10-01 r4</p>
   </main>
 
   <script>
@@ -1242,6 +1242,10 @@
           );
           if (lotWordRetry === qr.mfgLot || !lotRetry) lotRetry = lotWordRetry;
         }
+        if (lotRetry !== qr.mfgLot) {
+          const isolatedLot = await recognizeIsolatedLot(worker, roughLotRegion, qr.mfgLot);
+          if (isolatedLot === qr.mfgLot || !lotRetry) lotRetry = isolatedLot;
+        }
         if (lotRetry === qr.mfgLot || !mfgLot) mfgLot = lotRetry;
         profileRecord("OCR：製造ロット再試行", lotStartedAt);
       }
@@ -1346,6 +1350,29 @@
         mfgLot,
         numbering
       };
+    }
+
+    async function recognizeIsolatedLot(worker, region, expectedValue) {
+      let fallback = "";
+      // ラベル外の明るい帯を文字と誤認しないよう、同じ行の6文字だけを抽出。
+      // 細い線を失わない閾値と共通補間を使い、必要なら1pxだけ線を太くする。
+      for (const offset of [8, 16]) {
+        const binary = prepareDirectLightTextBinaryForOcr(region, 1, offset, true);
+        for (const line of findPrintedPartLines(binary, 6, 0.95)) {
+          const scaled = resizeOcrCanvas(line.isolated, ocrScaleForLine(line.isolated, 135), true);
+          const padded = padCanvas(scaled, 0.18, 255);
+          const candidate = await recognizeCodeWithFallback(worker, [padded], "7", "lot",
+            expectedValue, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+          if (candidate === expectedValue) return candidate;
+          if (!fallback && candidate) fallback = candidate;
+          padded.getContext("2d").putImageData(expandDarkPixelsSquare(canvasImageData(padded), 1), 0, 0);
+          const thickCandidate = await recognizeCodeWithFallback(worker, [padded], "7", "lot",
+            expectedValue, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+          if (thickCandidate === expectedValue) return thickCandidate;
+          if (!fallback && thickCandidate) fallback = thickCandidate;
+        }
+      }
+      return fallback;
     }
 
     async function getOcrWorker() {
@@ -1884,7 +1911,7 @@
       return count > 0 && (dark / count >= 0.52 || total / count < 120);
     }
 
-    function findPrintedPartLines(canvas) {
+    function findPrintedPartLines(canvas, expectedCount = 8, maxHeightRatio = 0.30) {
       const { width, height, data } = canvasImageData(canvas);
       const seen = new Uint8Array(width * height);
       const queue = new Int32Array(width * height);
@@ -1911,7 +1938,7 @@
           }
         }
         const w = right - left + 1, h = bottom - top + 1;
-        if (h < Math.max(12, height * 0.025) || h > height * 0.30 ||
+        if (h < Math.max(12, height * 0.025) || h > height * maxHeightRatio ||
             w < h * 0.12 || w > h * 1.25 || tail < w * h * 0.12) continue;
         glyphs.push({ left, right, top, bottom, h, center: (top + bottom) / 2,
           pixels: queue.slice(0, tail) });
@@ -1923,8 +1950,8 @@
           Math.abs(g.center - seed.center) <= seed.h * 0.22);
         let run = [];
         const finish = () => {
-          if (run.length !== 8) return;
-          const left = run[0].left, right = run[7].right;
+          if (run.length !== expectedCount) return;
+          const left = run[0].left, right = run[expectedCount - 1].right;
           const top = Math.min(...run.map(g => g.top)), bottom = Math.max(...run.map(g => g.bottom));
           const h = bottom - top + 1;
           if (right - left < h * 3 || right - left > h * 8) return;
@@ -1943,7 +1970,7 @@
       return groups.sort((a, b) => b.h - a.h).slice(0, 4).map(group => {
         const margin = Math.max(2, Math.round(group.h * 0.045));
         const left = Math.max(0, group.left - margin), top = Math.max(0, group.top - margin);
-        // 傾いた枠線が外接矩形へ入り込むため、検出した8文字の画素だけを残す。
+        // 傾いた枠線やラベル外の帯を除き、検出した文字の画素だけを残す。
         const line = document.createElement("canvas");
         line.width = Math.min(width, group.right + margin + 1) - left;
         line.height = Math.min(height, group.bottom + margin + 1) - top;
