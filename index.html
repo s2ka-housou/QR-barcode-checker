@@ -382,7 +382,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-09-10 r2</p>
+    <p class="note" style="text-align:center">更新版：2026-10-01 r3</p>
   </main>
 
   <script>
@@ -1453,41 +1453,37 @@
         prefix += match[0];
       }
 
-      // 数字4桁は一文字ずつ分離せず、形のつながりを残したまま読む。
+      // 年・月・日を連続して読む。10～12月の月コードはX・Y・Z。
       const lineText = await recognizeAlphaNumeric(
         worker,
         padCanvas(binaryCanvas, 0.16, 255),
         "7",
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
       );
-      const suffixes = extractFourDigitSuffixes(lineText);
+      const suffixes = extractManufacturingLotSuffixes(lineText);
       const hybridCandidates = suffixes.map(suffix => prefix + suffix);
       if (hybridCandidates.includes(expectedValue)) return expectedValue;
       const hybridFallback = hybridCandidates[0] || "";
 
-      // 連続認識で4桁を取得できない場合だけ、数字を個別に確認する。
+      // 連続認識で取得できない場合だけ、月の英字も許可して個別に確認する。
       let value = prefix;
       for (let index = 2; index < glyphs.length; index += 1) {
         const text = await recognizeAlphaNumeric(
           worker,
           padCanvas(glyphs[index], 0.28, 255),
           "10",
-          "0123456789"
+          index === 3 ? "123456789XYZ" : "0123456789"
         );
-        const match = text.match(/[0-9]/);
+        const match = text.match(index === 3 ? /[1-9XYZ]/ : /[0-9]/);
         if (!match) return hybridFallback;
         value += match[0];
       }
 
-      if (!/^[A-Z]{2}[0-9]{4}$/.test(value)) return hybridFallback;
+      if (!/^[A-Z]{2}[0-9][1-9XYZ][0-9]{2}$/.test(value)) return hybridFallback;
       return value === expectedValue ? expectedValue : value;
     }
 
-    function extractFourDigitSuffixes(ocrText) {
-      const digitMap = {
-        O: "0", Q: "0", I: "1", L: "1",
-        Z: "2", S: "5", G: "6", T: "7", B: "8"
-      };
+    function extractManufacturingLotSuffixes(ocrText) {
       const tokens = String(ocrText).match(/[A-Z0-9]+/g) || [];
       const candidates = [...tokens];
       const compact = tokens.join("");
@@ -1501,11 +1497,9 @@
             ? candidate
             : "";
         if (!rawSuffix) continue;
-        const normalized = [...rawSuffix]
-          .map(character => digitMap[character] || character)
-          .join("");
-        if (/^[0-9]{4}$/.test(normalized) && !suffixes.includes(normalized)) {
-          suffixes.push(normalized);
+        for (const normalized of normalizeOcrTokenCandidates("AA" + rawSuffix, "lot")) {
+          const suffix = normalized.slice(2);
+          if (!suffixes.includes(suffix)) suffixes.push(suffix);
         }
       }
       return suffixes;
@@ -1658,8 +1652,8 @@
       const primary = normalizeOcrToken(token, type);
       if (primary) candidates.push(primary);
 
-      // 細い製造ロット書体では「BA6901」が「BAGYOT」のように読まれる。
-      // 後半4桁だけに限定して、Y=9 と T=7/1 の候補を展開する。
+      // 細い書体では「BB6X01」が「BB6XOT」のように読まれる。
+      // 数字の誤読補正を候補に加えるが、月位置のX/Y/Zは数字へ変換しない。
       // 実際の採用はpickCode側でQR値との完全一致を要求する。
       if (type === "lot" && token.length === 6 && /^[A-Z]{2}/.test(token)) {
         const digitOptions = {
@@ -1668,8 +1662,8 @@
           B: ["8"], Y: ["9"]
         };
         let suffixes = [""];
-        for (const character of token.slice(2)) {
-          const options = /[0-9]/.test(character)
+        for (const [index, character] of [...token.slice(2)].entries()) {
+          const options = (index === 1 && /^[XYZ]$/.test(character)) || /[0-9]/.test(character)
             ? [character]
             : (digitOptions[character] || []);
           if (!options.length) {
@@ -1680,7 +1674,7 @@
         }
         for (const suffix of suffixes) {
           const value = token.slice(0, 2) + suffix;
-          if (/^[A-Z]{2}[0-9]{4}$/.test(value) && !candidates.includes(value)) {
+          if (/^[A-Z]{2}[0-9][1-9XYZ][0-9]{2}$/.test(value) && !candidates.includes(value)) {
             candidates.push(value);
           }
         }
@@ -1700,8 +1694,9 @@
         return /^[A-Z][0-9]{7}$/.test(value) ? value : "";
       }
       if (type === "lot" && token.length === 6 && /^[A-Z]{2}/.test(token)) {
-        const value = token.slice(0, 2) + toDigits(token.slice(2));
-        return /^[A-Z]{2}[0-9]{4}$/.test(value) ? value : "";
+        const month = /^[XYZ]$/.test(token[3]) ? token[3] : toDigits(token[3]);
+        const value = token.slice(0, 2) + toDigits(token[2]) + month + toDigits(token.slice(4));
+        return /^[A-Z]{2}[0-9][1-9XYZ][0-9]{2}$/.test(value) ? value : "";
       }
       if (type === "number" && token.length === 4) {
         const value = toDigits(token);
