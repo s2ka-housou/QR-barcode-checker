@@ -345,6 +345,9 @@
       </label>
     </section>
 
+    <p class="hint">NGの画像と読取結果は、読取改善のため自動保存します。</p>
+    <p id="collection-status" class="hint" role="status" aria-live="polite" hidden></p>
+
     <div id="status" role="status" aria-live="polite" hidden></div>
 
     <section id="preview-wrap" class="card">
@@ -382,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-10-01 r4</p>
+    <p class="note" style="text-align:center">更新版：2026-10-13 r5</p>
   </main>
 
   <script>
@@ -407,6 +410,308 @@
     let barcodeData = null;
     let ocrData = null;
     let ocrWorker = null;
+    let analysisInProgress = false;
+
+    // NG upload queue. No credential is embedded in this public page.
+    const NgCollector = (() => {
+      const ENDPOINT = "https://qr-ng-collector.s2ka-housou.workers.dev/collect";
+      const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+      const MAX_QUEUE_BYTES = 100 * 1024 * 1024;
+      const MAX_QUEUE_COUNT = 20;
+      const memory = new Map();
+      let databasePromise = null;
+      let running = false;
+      let timer = null;
+      let lastMessage = "";
+      let warning = "";
+      let renderSequence = 0;
+      // Local OCR tests must not upload fixtures to the real repository.
+      const enabled = location.origin === "https://s2ka-housou.github.io";
+
+      function database() {
+        if (databasePromise) return databasePromise;
+        databasePromise = new Promise((resolve, reject) => {
+          const request = indexedDB.open("qr-ng-uploads", 1);
+          let expired = false;
+          const timeout = setTimeout(() => {
+            expired = true;
+            reject(new Error("storage_unavailable"));
+          }, 5000);
+          request.onupgradeneeded = () => {
+            request.result.createObjectStore("jobs", { keyPath: "id" });
+            request.result.createObjectStore("images", { keyPath: "id" });
+          };
+          request.onsuccess = () => {
+            clearTimeout(timeout);
+            if (expired) { request.result.close(); return; }
+            request.result.onversionchange = () => {
+              request.result.close();
+              databasePromise = null;
+            };
+            resolve(request.result);
+          };
+          request.onerror = () => { clearTimeout(timeout); reject(request.error); };
+        });
+        databasePromise.catch(() => { databasePromise = null; });
+        return databasePromise;
+      }
+
+      async function transaction(mode, callback) {
+        const db = await database();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(["jobs", "images"], mode);
+          let result;
+          tx.oncomplete = () => resolve(result);
+          tx.onabort = tx.onerror = event => reject(tx.error || event.target.error || new Error("storage_unavailable"));
+          callback(tx.objectStore("jobs"), value => { result = value; }, tx);
+        });
+      }
+
+      async function allJobs() {
+        let stored = [];
+        try {
+          stored = await transaction("readonly", (store, done) => {
+            const request = store.getAll();
+            request.onsuccess = () => done(request.result);
+          });
+        } catch {
+          warning = "端末の一時保存を利用できません。この画面を閉じる前に送信完了を確認してください。";
+        }
+        const combined = new Map(stored.map(job => [job.id, job]));
+        for (const [id, job] of memory) combined.set(id, job);
+        return [...combined.values()].sort((a, b) => a.report.capturedAt.localeCompare(b.report.capturedAt));
+      }
+
+      async function persist(job, adding = false) {
+        try {
+          await transaction("readwrite", (store, done, tx) => {
+            const request = store.getAll();
+            request.onsuccess = () => {
+              const jobs = request.result.filter(item => item.id !== job.id);
+              if (jobs.length >= MAX_QUEUE_COUNT ||
+                  jobs.reduce((bytes, item) => bytes + item.file.size, 0) + job.file.size > MAX_QUEUE_BYTES) {
+                tx.abort();
+              } else {
+                const { bytes, ...metadata } = job;
+                if (bytes) tx.objectStore("images").put({ id: job.id, bytes });
+                store.put({ ...metadata, durable: true });
+              }
+            };
+          });
+          job.durable = true;
+          delete job.bytes;
+          memory.delete(job.id);
+        } catch {
+          const others = [...memory.values()].filter(item => item.id !== job.id);
+          if (others.length >= 3 || others.reduce((bytes, item) => bytes + item.file.size, 0) + job.file.size > 24 * 1024 * 1024) {
+            throw new Error("queue_full");
+          }
+          if (adding) job.durable = false;
+          memory.set(job.id, job);
+        }
+      }
+
+      async function remove(job) {
+        // If deletion fails, retain the same ID for a harmless idempotent retry.
+        await transaction("readwrite", (store, done, tx) => {
+          store.delete(job.id);
+          tx.objectStore("images").delete(job.id);
+        });
+        memory.delete(job.id);
+      }
+
+      async function render() {
+        const sequence = ++renderSequence;
+        const jobs = await allJobs();
+        if (sequence !== renderSequence) return;
+        const element = document.getElementById("collection-status");
+        if (!element) return;
+        const blocked = jobs.filter(job => job.blocked).length;
+        const transient = jobs.filter(job => memory.has(job.id)).length;
+        const messages = [];
+        if (running && jobs.length) messages.push(`NG画像を自動送信しています（未送信 ${jobs.length}件）。`);
+        else if (jobs.length) messages.push(`NG画像：未送信 ${jobs.length}件。アプリを開いて通信できるときに自動再送します。`);
+        else if (lastMessage) messages.push(lastMessage);
+        if (jobs.some(job => job.lastError === "github_configuration")) {
+          messages.push("保存先の設定を管理者に確認してください。");
+        }
+        if (blocked) messages.push(`うち${blocked}件は送信できません。元画像を保管し、管理者に連絡してください。`);
+        if (transient) messages.push(`${transient}件はこの画面を閉じると消える可能性があります。送信完了まで開いておいてください。`);
+        if (warning) messages.push(warning);
+        element.textContent = messages.join(" ");
+        element.hidden = !messages.length;
+      }
+
+      function toBase64(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(",", 2)[1]);
+          reader.onerror = () => reject(new Error("image_read_failed"));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      async function send(job) {
+        let bytes = job.bytes;
+        if (!bytes) bytes = await transaction("readonly", (store, done, tx) => {
+          const request = tx.objectStore("images").get(job.id);
+          request.onsuccess = () => done(request.result?.bytes);
+        });
+        if (!bytes) throw new Error("image_unavailable");
+        const base64 = await toBase64(new Blob([bytes], { type: job.file.type }));
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 120000);
+        try {
+          const response = await fetch(ENDPOINT, {
+            method: "POST", mode: "cors", credentials: "omit", cache: "no-store",
+            headers: { "Content-Type": "application/octet-stream",
+              "X-Image-Bytes": String(job.file.size),
+              "X-Scan-Report": btoa(Array.from(new TextEncoder().encode(JSON.stringify(job.report)),
+                byte => String.fromCharCode(byte)).join("")) },
+            body: base64,
+            signal: controller.signal
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || result.stored !== true || result.id !== job.id) {
+            const error = new Error(result.error || "send_failed");
+            error.permanent = [400, 409, 413, 415, 422].includes(response.status);
+            error.retryAfter = Math.min(86400, Math.max(0, Number(response.headers.get("Retry-After")) || 0));
+            throw error;
+          }
+        } finally { clearTimeout(timeout); }
+      }
+
+      async function schedule() {
+        clearTimeout(timer);
+        const jobs = await allJobs();
+        const pending = jobs.filter(job => !job.blocked);
+        if (!pending.length) return;
+        const next = Math.min(...pending.map(job => job.nextAttemptAt));
+        const delay = navigator.onLine === false ? 30000 : Math.max(1000, next - Date.now());
+        timer = setTimeout(kick, delay);
+      }
+
+      async function flush() {
+        if (!enabled || running) return;
+        running = true;
+        try {
+          if (navigator.onLine === false) return;
+          const jobs = await allJobs();
+          const completed = new Set();
+          for (const job of jobs) {
+            if (job.blocked || job.nextAttemptAt > Date.now()) continue;
+            await render();
+            try {
+              await send(job);
+              try { await remove(job); }
+              catch (error) {
+                // A memory-only record can be removed after a confirmed upload even without IndexedDB.
+                if (!job.durable && memory.has(job.id)) memory.delete(job.id);
+                else throw error;
+              }
+              lastMessage = "NG画像と読取結果を保存しました。";
+              completed.add(job.id);
+            } catch (error) {
+              job.attempts++;
+              job.blocked = Boolean(error.permanent);
+              job.lastError = error.message;
+              const backoff = Math.min(3600000, 30000 * 2 ** Math.min(job.attempts - 1, 7));
+              job.nextAttemptAt = Date.now() + Math.max(backoff + Math.random() * 5000, (error.retryAfter || 0) * 1000);
+              await persist(job);
+              // Avoid retrying every queued image against a rate-limited or broken destination.
+              if (!job.blocked) {
+                for (const rest of jobs) {
+                  if (rest.id !== job.id && !completed.has(rest.id) && !rest.blocked) {
+                    rest.nextAttemptAt = Math.max(rest.nextAttemptAt, job.nextAttemptAt);
+                    rest.lastError = job.lastError;
+                    await persist(rest);
+                  }
+                }
+                break;
+              }
+            }
+          }
+        } finally {
+          running = false;
+          await render();
+          await schedule();
+        }
+      }
+
+      function kick() {
+        void flush().catch(() => {
+          warning = "NG画像の自動保存で問題が発生しました。元画像を保管してください。";
+          void render().catch(() => {});
+          clearTimeout(timer);
+          timer = setTimeout(kick, 60000);
+        });
+      }
+
+      async function enqueue(file, report) {
+        if (!enabled) return;
+        try {
+          if (!file.size || file.size > MAX_IMAGE_BYTES) {
+            warning = "今回の画像は空か12MiBを超えるため自動保存できません。元画像を保管してください。";
+            await render();
+            return;
+          }
+          // Persist exact bytes rather than Blob/File handles (WebKit portability).
+          // Keep bytes in a separate store so listing the queue does not load all images.
+          const bytes = await file.arrayBuffer();
+          const job = { id: report.id, file: { size: file.size, type: file.type }, bytes,
+            report, attempts: 0, nextAttemptAt: 0, blocked: false, durable: true };
+          await persist(job, true);
+          if (memory.has(job.id)) { job.durable = false; memory.set(job.id, job); }
+          await render();
+          kick();
+        } catch {
+          warning = "未送信画像が保存上限に達したか、一時保存できませんでした。今回の元画像を保管してください。";
+          await render().catch(() => {});
+        }
+      }
+
+      if (enabled) {
+        window.addEventListener("online", kick);
+        window.addEventListener("pageshow", kick);
+        document.addEventListener("visibilitychange", () => { if (!document.hidden) kick(); });
+        kick();
+      }
+      return { enqueue };
+    })();
+
+    function collectNgImage(file, failureReason) {
+      if (document.getElementById("status").dataset.type !== "ng") return;
+      const expected = qrData ? parseQRCode(qrData.text) : null;
+      const actual = {
+        itf: barcodeData ? normalizeBarcode(barcodeData.text) : "",
+        partNo: ocrData?.partNo || "", mfgLot: ocrData?.mfgLot || "", numbering: ocrData?.numbering || ""
+      };
+      const reasons = failureReason ? [failureReason] : [];
+      if (!qrData) reasons.push("qr_unread");
+      if (!barcodeData) reasons.push("itf_unread");
+      if (expected) {
+        if (barcodeData && actual.itf !== expected.itf) reasons.push("itf_mismatch");
+        for (const key of ["partNo", "mfgLot", "numbering"]) {
+          if (!actual[key]) reasons.push(`${key}_unread`);
+          else if (actual[key] !== expected[key]) reasons.push(`${key}_mismatch`);
+        }
+      }
+      const uuid = crypto.randomUUID ? crypto.randomUUID() :
+        "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
+          (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
+      const report = {
+        schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
+        appVersion: "2026-10-13 r5", reasons, expected, actual,
+        qrText: qrData?.text || "", itfText: barcodeData?.text || "",
+        message: document.getElementById("status").textContent,
+        originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
+        analysisImage: sourceCanvas ? { width: sourceCanvas.width, height: sourceCanvas.height } : null,
+        browser: { userAgent: navigator.userAgent, language: navigator.language,
+          standalone: isStandaloneApp(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+        page: location.origin + location.pathname
+      };
+      void NgCollector.enqueue(file, report);
+    }
 
     function profileRecord(label, startedAt) {
       if (!PROFILE_ENABLED) return;
@@ -446,12 +751,19 @@
     });
 
     async function analyseFile(file) {
-      if (!window.ZXingWASM || !window.ZXingWASM.readBarcodes) {
-        setStatus("解析ライブラリを読み込めませんでした。ネットワーク接続を確認してください。", "ng");
-        return;
-      }
-
+      if (analysisInProgress) return;
+      analysisInProgress = true;
+      input.disabled = true;
+      resetButton.disabled = true;
+      clearResults();
+      sourceCanvas = null;
+      let failureReason = "";
       try {
+        if (!window.ZXingWASM || !window.ZXingWASM.readBarcodes) {
+          failureReason = "analysis_library_unavailable";
+          setStatus("解析ライブラリを読み込めませんでした。ネットワーク接続を確認してください。", "ng");
+          return;
+        }
         window.__analysisProfile.length = 0;
         const totalStartedAt = performance.now();
         clearResults();
@@ -667,7 +979,18 @@
         profileRecord("全処理", totalStartedAt);
       } catch (error) {
         console.error(error);
+        failureReason = "image_analysis_failed";
         setStatus("画像を解析できませんでした。別の写真で試してください。", "ng");
+      } finally {
+        try { collectNgImage(file, failureReason); }
+        catch {
+          const notice = document.getElementById("collection-status");
+          notice.hidden = false;
+          notice.textContent = "NG画像を自動保存できませんでした。元画像を保管してください。";
+        }
+        analysisInProgress = false;
+        input.disabled = false;
+        resetButton.disabled = false;
       }
     }
 
