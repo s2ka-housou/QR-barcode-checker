@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-10-14 r6</p>
+    <p class="note" style="text-align:center">更新版：2026-10-14 r7</p>
   </main>
 
   <script>
@@ -413,6 +413,79 @@
     let analysisInProgress = false;
 
     // NG upload queue. No credential is embedded in this public page.
+    const UsageStats = (() => {
+      const prefix = "qr-usage-v1:";
+      const endpoint = "https://qr-ng-collector.s2ka-housou.workers.dev/usage";
+      const enabled = location.origin === "https://s2ka-housou.github.io";
+      const memory = new Map();
+      let sending = false;
+      function put(event) {
+        memory.set(event.id, event);
+        try { localStorage.setItem(prefix + event.id, JSON.stringify(event)); } catch {}
+      }
+      function pending() {
+        const events = new Map(memory);
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key?.startsWith(prefix)) continue;
+            try {
+              const e = JSON.parse(localStorage.getItem(key));
+              if (e?.id && (!events.has(e.id) || e.revision > events.get(e.id).revision)) events.set(e.id, e);
+            } catch {}
+          }
+        } catch {}
+        return [...events.values()].slice(0, 20);
+      }
+      function acknowledge(event) {
+        if (memory.get(event.id)?.revision === event.revision) memory.delete(event.id);
+        try {
+          const key = prefix + event.id;
+          const current = JSON.parse(localStorage.getItem(key));
+          if (current?.revision === event.revision) localStorage.removeItem(key);
+        } catch {}
+      }
+      async function flush() {
+        if (!enabled || sending || !navigator.onLine) return;
+        sending = true;
+        let timeout;
+        try {
+          const events = pending();
+          if (!events.length) return;
+          const controller = new AbortController();
+          timeout = setTimeout(() => controller.abort(), 10000);
+          const response = await fetch(endpoint, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ events }), signal: controller.signal, keepalive: true,
+            credentials: "omit", redirect: "error"
+          });
+          if (!response.ok) return;
+          const result = await response.json();
+          if (result.stored === true) events.forEach(acknowledge);
+        } catch {} finally { clearTimeout(timeout); sending = false; }
+      }
+      function begin() {
+        if (!enabled) return null;
+        try {
+          const event = { id: crypto.randomUUID(), startedAt: new Date().toISOString(),
+            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-10-14 r7" };
+          put(event); void flush(); return event;
+        } catch { return null; }
+      }
+      function finish(event, lot, outcome) {
+        if (!event) return;
+        try { put({ ...event, revision: 1, lot: String(lot || ""), outcome }); void flush(); } catch {}
+      }
+      if (enabled) {
+        setInterval(() => { void flush(); }, 15000);
+        addEventListener("online", () => { void flush(); });
+        addEventListener("pagehide", () => { void flush(); });
+        document.addEventListener("visibilitychange", () => { void flush(); });
+        setTimeout(() => { void flush(); }, 1000);
+      }
+      return { begin, finish };
+    })();
+
     const NgCollector = (() => {
       const ENDPOINT = "https://qr-ng-collector.s2ka-housou.workers.dev/collect";
       const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
@@ -701,7 +774,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-10-14 r6", reasons, expected, actual,
+        appVersion: "2026-10-14 r7", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -753,6 +826,7 @@
     async function analyseFile(file) {
       if (analysisInProgress) return;
       analysisInProgress = true;
+      const usageEvent = UsageStats.begin();
       input.disabled = true;
       resetButton.disabled = true;
       clearResults();
@@ -982,6 +1056,10 @@
         failureReason = "image_analysis_failed";
         setStatus("画像を解析できませんでした。別の写真で試してください。", "ng");
       } finally {
+        try {
+          UsageStats.finish(usageEvent, qrData ? parseQRCode(qrData.text).mfgLot : "",
+            failureReason ? "ERROR" : document.getElementById("status").dataset.type === "ok" ? "OK" : "NG");
+        } catch {}
         try { collectNgImage(file, failureReason); }
         catch {
           const notice = document.getElementById("collection-status");
