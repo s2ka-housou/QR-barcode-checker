@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-10-13 r5</p>
+    <p class="note" style="text-align:center">更新版：2026-10-14 r6</p>
   </main>
 
   <script>
@@ -701,7 +701,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-10-13 r5", reasons, expected, actual,
+        appVersion: "2026-10-14 r6", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -1456,6 +1456,15 @@
         if (wholeImagePart === qr.partNo || !partNo) partNo = wholeImagePart;
       }
 
+      // Q/Oのような紛らわしい文字は、枠を除いた8文字で独立に再確認する。
+      // 期待値を認識条件に使わず、異なるサイズで同じ文字列を2回読めた場合だけ採用。
+      if (partNo !== qr.partNo) {
+        for (const { panel } of darkPartPanels) {
+          const isolatedPart = await recognizeIsolatedDarkPart(worker, panel);
+          if (isolatedPart) { partNo = isolatedPart; break; }
+        }
+      }
+
       profileRecord("OCR：品番", partStartedAt);
 
       // 黒ラベルはQRの左側を切り出し、製造ロットとナンバリングを別々の1行として読む。
@@ -1673,6 +1682,25 @@
         mfgLot,
         numbering
       };
+    }
+
+    async function recognizeIsolatedDarkPart(worker, panel) {
+      const binary = prepareBinaryForOcr(panel, true, 1, true);
+      for (const line of findPrintedPartLines(binary, 8, 0.95)) {
+        const votes = new Map();
+        for (const height of [80, 100, 70]) {
+          const scaled = resizeOcrCanvas(line.isolated, ocrScaleForLine(line.isolated, height), true);
+          const text = await recognizeAlphaNumeric(worker, padCanvas(scaled, 0.18, 255),
+            "7", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+          // 0をO/Qへ変換せず、OCRが英字と7桁の数字を実際に返した場合だけ投票する。
+          const matches = text.trim().match(/^[A-Z][0-9]{7}$/);
+          if (!matches) continue;
+          const value = matches[0];
+          votes.set(value, (votes.get(value) || 0) + 1);
+          if (votes.get(value) >= 2) return value;
+        }
+      }
+      return "";
     }
 
     async function recognizeIsolatedLot(worker, region, expectedValue) {
