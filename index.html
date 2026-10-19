@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-10-19 r8</p>
+    <p class="note" style="text-align:center">更新版：2026-10-19 r9</p>
   </main>
 
   <script>
@@ -468,7 +468,7 @@
         if (!enabled) return null;
         try {
           const event = { id: crypto.randomUUID(), startedAt: new Date().toISOString(),
-            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-10-19 r8" };
+            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-10-19 r9" };
           put(event); void flush(); return event;
         } catch { return null; }
       }
@@ -774,7 +774,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-10-19 r8", reasons, expected, actual,
+        appVersion: "2026-10-19 r9", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -1752,6 +1752,11 @@
           if (focusedNumberRetry === qr.numbering) numberRetry = focusedNumberRetry;
         }
         if (numberRetry === qr.numbering || !numbering) numbering = numberRetry;
+        // 汚れ・QR端を除いた4文字を、期待値に依存せず再認識する。
+        if (numbering !== qr.numbering) {
+          const isolatedNumber = await recognizeIsolatedNumber(worker, labelCanvas);
+          if (isolatedNumber) numbering = isolatedNumber;
+        }
         profileRecord("OCR：ナンバリング再試行", numberingStartedAt);
       }
 
@@ -1760,6 +1765,28 @@
         mfgLot,
         numbering
       };
+    }
+
+    async function recognizeIsolatedNumber(worker, labelCanvas) {
+      const lower = cropCanvasFraction(labelCanvas, 0.05, 0.44, 0.90, 0.48);
+      for (const binary of [
+        prepareDirectLightTextBinaryForOcr(lower, 1, 16, true),
+        prepareBinaryForOcr(lower, true, 1, true)
+      ]) {
+        for (const line of findPrintedPartLines(binary, 4, 0.95, 1.2)) {
+          const votes = new Map();
+          for (const height of [80, 100, 135]) {
+            const sized = resizeOcrCanvas(line.isolated, ocrScaleForLine(line.isolated, height), true);
+            const raw = await recognizeAlphaNumeric(worker, padCanvas(sized, 0.18, 255), "7", "0123456789");
+            const value = raw.trim();
+            // 任意の4桁をそのまま採用。長い文字列の切詰めやQR値への置換はしない。
+            if (!/^[0-9]{4}$/.test(value)) continue;
+            votes.set(value, (votes.get(value) || 0) + 1);
+            if (votes.get(value) >= 2) return value;
+          }
+        }
+      }
+      return "";
     }
 
     async function recognizeIsolatedDarkPart(worker, panel) {
@@ -2340,7 +2367,7 @@
       return count > 0 && (dark / count >= 0.52 || total / count < 120);
     }
 
-    function findPrintedPartLines(canvas, expectedCount = 8, maxHeightRatio = 0.30) {
+    function findPrintedPartLines(canvas, expectedCount = 8, maxHeightRatio = 0.30, minAspect = 3) {
       const { width, height, data } = canvasImageData(canvas);
       const seen = new Uint8Array(width * height);
       const queue = new Int32Array(width * height);
@@ -2383,7 +2410,7 @@
           const left = run[0].left, right = run[expectedCount - 1].right;
           const top = Math.min(...run.map(g => g.top)), bottom = Math.max(...run.map(g => g.bottom));
           const h = bottom - top + 1;
-          if (right - left < h * 3 || right - left > h * 8) return;
+          if (right - left < h * minAspect || right - left > h * 8) return;
           if (groups.some(g => Math.abs(g.left - left) < h * 0.2 && Math.abs(g.top - top) < h * 0.2)) return;
           groups.push({ left, right, top, bottom, h, glyphs: run.slice() });
         };
