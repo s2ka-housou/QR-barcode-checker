@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-10-14 r7</p>
+    <p class="note" style="text-align:center">更新版：2026-10-19 r8</p>
   </main>
 
   <script>
@@ -468,7 +468,7 @@
         if (!enabled) return null;
         try {
           const event = { id: crypto.randomUUID(), startedAt: new Date().toISOString(),
-            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-10-14 r7" };
+            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-10-19 r8" };
           put(event); void flush(); return event;
         } catch { return null; }
       }
@@ -774,7 +774,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-10-14 r7", reasons, expected, actual,
+        appVersion: "2026-10-19 r8", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -2182,8 +2182,8 @@
       if (!bounds) return canvas;
       const qrSize = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
       const bottom = Math.max(1, Math.floor(bounds.minY - qrSize * 0.12));
-      const top = Math.max(0, Math.floor(bottom - canvas.height * 0.62));
-      return cropCanvasRect(canvas, 0, top, canvas.width, bottom - top);
+      // 品番が写真上端にあっても欠けないよう、QRより上をすべて検索する。
+      return cropCanvasRect(canvas, 0, 0, canvas.width, bottom);
     }
 
     function findDarkTextPanel(canvas, darkThreshold = 92) {
