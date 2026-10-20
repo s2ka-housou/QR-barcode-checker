@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-10-19 r9</p>
+    <p class="note" style="text-align:center">更新版：2026-10-20 r10</p>
   </main>
 
   <script>
@@ -468,7 +468,7 @@
         if (!enabled) return null;
         try {
           const event = { id: crypto.randomUUID(), startedAt: new Date().toISOString(),
-            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-10-19 r9" };
+            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-10-20 r10" };
           put(event); void flush(); return event;
         } catch { return null; }
       }
@@ -774,7 +774,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-10-19 r9", reasons, expected, actual,
+        appVersion: "2026-10-20 r10", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -1392,7 +1392,11 @@
       const darkPartPanels = [];
       if (partNo !== qr.partNo) {
         for (const threshold of [92, 130]) {
-          const candidate = findDarkTextPanel(partRegion, threshold);
+          let candidate = findDarkTextPanel(partRegion, threshold);
+          // 白抜き文字で黒枠が横帯に分かれた場合だけ、短い隙間をつないで再検出する。
+          if (!candidate || !isMostlyDarkCanvas(candidate)) {
+            candidate = findDarkTextPanel(partRegion, threshold, true);
+          }
           if (!candidate || !isMostlyDarkCanvas(candidate)) continue;
           const duplicate = darkPartPanels.some(entry =>
             entry.panel.sourceRect && candidate.sourceRect &&
@@ -2213,7 +2217,7 @@
       return cropCanvasRect(canvas, 0, 0, canvas.width, bottom);
     }
 
-    function findDarkTextPanel(canvas, darkThreshold = 92) {
+    function findDarkTextPanel(canvas, darkThreshold = 92, bridgeTextGaps = false) {
       const width = canvas.width;
       const height = canvas.height;
       if (width < 40 || height < 30) return null;
@@ -2236,7 +2240,10 @@
         rowDensity.push(dark / sampledColumns);
       }
 
-      const rowRuns = findDenseRuns(rowDensity, 0.2, 2);
+      // 縮小後のサンプル間隔に換算し、撮影解像度が変わっても同じ比率で扱う。
+      // QRラベル検出など既存の呼び出しでは従来の2サンプルを維持する。
+      const allowedGap = bridgeTextGaps ? Math.max(2, Math.ceil(width * 0.015 / step)) : 2;
+      const rowRuns = findDenseRuns(rowDensity, 0.2, allowedGap);
       const minimumRows = Math.max(3, Math.floor(height * 0.065 / step));
       const usableRows = rowRuns.filter(run => run.end - run.start + 1 >= minimumRows);
       if (!usableRows.length) return null;
