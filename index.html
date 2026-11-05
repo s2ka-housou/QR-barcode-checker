@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-11-05 r12</p>
+    <p class="note" style="text-align:center">更新版：2026-11-05 r13</p>
   </main>
 
   <script>
@@ -468,7 +468,7 @@
         if (!enabled) return null;
         try {
           const event = { id: crypto.randomUUID(), startedAt: new Date().toISOString(),
-            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-11-05 r12" };
+            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-11-05 r13" };
           put(event); void flush(); return event;
         } catch { return null; }
       }
@@ -774,7 +774,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-11-05 r12", reasons, expected, actual,
+        appVersion: "2026-11-05 r13", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -855,212 +855,19 @@
         profileRecord("画像全体のQR・ITF解析", stageStartedAt);
         acceptResults(wholeResults);
 
-        // 丸い白抜きセルをノイズと誤認して消さない全体画像の再試行。
-        // 標準解析でQRが読めた画像には追加コストを掛けない。
-        if (!qrData) {
-          stageStartedAt = performance.now();
-          const roundCellResults = await scanImage(
-            wholeImage,
-            ["QRCode"],
-            "全体画像・丸セル補正・ノイズ除去なし",
-            "LocalAverage",
-            { tryDenoise: false, tryDownscale: false }
-          );
-          acceptResults(roundCellResults);
-          profileRecord("全体画像の丸セルQR再解析", stageStartedAt);
-        }
-
-        // 細かなQRのセルが元サイズで分離しない場合、縮小画像で追加確認する。
+        // 全体の多段解像度で検出し、難しい印字は原画像の正規化処理へ渡す。
         if (!qrData) {
           for (const scale of [0.7, 0.85]) {
-          const reduced = upscaleCanvas(sourceCanvas, scale, true);
-          const reducedResults = await scanImage(canvasImageData(reduced), ["QRCode"],
-            "全体画像・縮小再解析", "LocalAverage", { tryDenoise: false, tryDownscale: false });
-          // 後続の切り出しには元画像の座標を渡す。
-          acceptResults(reducedResults.map(result => ({ ...result,
-            position: result.position ? Object.fromEntries(Object.entries(result.position).map(([key, point]) =>
-              [key, { x: point.x * sourceCanvas.width / reduced.width,
-                y: point.y * sourceCanvas.height / reduced.height }])) : result.position
-          })));
-          if (qrData) break;
+            const reduced = upscaleCanvas(sourceCanvas, scale, true);
+            const hits = await scanImage(canvasImageData(reduced), ["QRCode"], "全体画像・多段解像度", "LocalAverage", {tryDenoise:false,tryDownscale:false});
+            acceptResults(hits.map(hit => ({...hit, position:hit.position ? Object.fromEntries(Object.entries(hit.position).map(([key,p]) => [key,{x:p.x*sourceCanvas.width/reduced.width,y:p.y*sourceCanvas.height/reduced.height}])) : hit.position})));
+            if (qrData) break;
           }
         }
-
-        // 固定位置より先に黒ベタの製造ラベルを検出し、その右側のQRだけを解析する。
-        // 二値化はコントラスト強調を行わず、薄い白セルを残す方向へ閾値を下げて試す。
         if (!qrData) {
           stageStartedAt = performance.now();
-          const detectedLabel = findQrLabelPanel(sourceCanvas);
-          if (detectedLabel) {
-            const qrCandidate = cropCanvasFraction(detectedLabel, 0.42, 0, 0.58, 1);
-            const candidateScale = clamp(
-              1200 / Math.max(qrCandidate.width, qrCandidate.height),
-              1,
-              4
-            );
-            const enlargedCandidate = upscaleCanvas(qrCandidate, candidateScale, false);
-            const candidateImage = canvasImageData(enlargedCandidate);
-
-            const rawResults = await scanImage(
-              candidateImage,
-              ["QRCode"],
-              "黒ベタ検出QR・無加工",
-              "LocalAverage",
-              { tryDenoise: false, tryDownscale: false }
-            );
-            acceptResults(rawResults);
-
-            let leastRestrictiveBinary = null;
-            if (!qrData) {
-              for (const thresholdOffset of [0, -10, -20]) {
-                const thresholded = binarizeLightOnDark(candidateImage, thresholdOffset);
-                if (thresholdOffset === -20) leastRestrictiveBinary = thresholded;
-                const thresholdResults = await scanImage(
-                  thresholded,
-                  ["QRCode"],
-                  `黒ベタ検出QR・閾値${thresholdOffset}`,
-                  "LocalAverage",
-                  { tryDenoise: false, tryDownscale: false, tryInvert: false }
-                );
-                acceptResults(thresholdResults);
-                if (qrData) break;
-              }
-            }
-
-            // 閾値を下げても読めない場合だけ、情報を最も多く残した画像を1px膨張する。
-            if (!qrData && leastRestrictiveBinary) {
-              const expanded = expandDarkPixelsSquare(leastRestrictiveBinary, 1);
-              const expandedResults = await scanImage(
-                expanded,
-                ["QRCode"],
-                "黒ベタ検出QR・閾値-20・四角形膨張",
-                "LocalAverage",
-                { tryDenoise: false, tryDownscale: false, tryInvert: false }
-              );
-              acceptResults(expandedResults);
-            }
-          }
-          profileRecord("黒ベタ検出QRの追加解析", stageStartedAt);
-        }
-
-        // 全体画像で不足したコードだけを、位置に合わせて強めの前処理で追加解析する。
-        if (!qrData) {
-          stageStartedAt = performance.now();
-          const qrImage = cropByLayout(sourceCanvas, LAYOUT.qr);
-          const qrResults = await scanVariants(qrImage, ["QRCode"], "QR領域");
-          acceptResults(qrResults);
-
-          // 丸い白抜きセルのQR向け追加解析。
-          // 白い印字を黒セルへ明示的に反転してから、ノイズ除去と自動縮小を止める。
-          // QR領域だけを対象にするため、全体画像よりセル密度を保ちやすい。
-          if (!qrData) {
-            const preservedDots = binarizeOtsu(qrImage, true);
-            const preservedResults = await scanImage(
-              preservedDots,
-              ["QRCode"],
-              "QR領域・白抜きセル保護",
-              "LocalAverage",
-              { tryDenoise: false, tryDownscale: false, tryInvert: false }
-            );
-            acceptResults(preservedResults);
-
-            if (!qrData) {
-              const histogramResults = await scanImage(
-                preservedDots,
-                ["QRCode"],
-                "QR領域・白抜きセル保護・GlobalHistogram",
-                "GlobalHistogram",
-                { tryDenoise: false, tryDownscale: false, tryInvert: false }
-              );
-              acceptResults(histogramResults);
-            }
-
-            // それでも読めない場合は4倍相当へ最近傍拡大し、元の白セルに
-            // 相当する黒セルを3×3の四角形で1pxだけ膨張して再解析する。
-            if (!qrData) {
-              const enlargedDots = upscaleImageDataNearest(preservedDots, 2);
-              const squaredDots = expandDarkPixelsSquare(enlargedDots, 1);
-              const squaredResults = await scanImage(
-                squaredDots,
-                ["QRCode"],
-                "QR領域・白セル四角形膨張",
-                "LocalAverage",
-                { tryDenoise: false, tryDownscale: false, tryInvert: false }
-              );
-              acceptResults(squaredResults);
-
-              if (!qrData) {
-                const squaredHistogramResults = await scanImage(
-                  squaredDots,
-                  ["QRCode"],
-                  "QR領域・白セル四角形膨張・GlobalHistogram",
-                  "GlobalHistogram",
-                  { tryDenoise: false, tryDownscale: false, tryInvert: false }
-                );
-                acceptResults(squaredHistogramResults);
-              }
-            }
-          }
-          profileRecord("QR領域の追加解析", stageStartedAt);
-        }
-
-        // 黒ラベルを検出できた場合は、QRがある右側だけを大きく拡大して再解析する。
-        if (!qrData) {
-          stageStartedAt = performance.now();
-          const darkLabel = findQrLabelPanel(sourceCanvas);
-          if (darkLabel) {
-            const qrCandidate = cropCanvasFraction(darkLabel, 0.40, 0, 0.60, 1);
-            const enlargedQr = upscaleCanvas(qrCandidate, 3, false);
-            const focusedResults = await scanVariants(
-              canvasImageData(enlargedQr),
-              ["QRCode"],
-              "黒ラベル内QR"
-            );
-            acceptResults(focusedResults);
-
-            // QRが小さく、黒ラベル上の汚れで輪郭が途切れる画像向けの救済処理。
-            // まず最近傍拡大でセルの輪郭を保ったまま再試行する。
-            if (!qrData) {
-              const enlarged = upscaleCanvas(qrCandidate, 4, false);
-              const padded = padCanvas(enlarged, 0.14, 0);
-              const rescueResults = await scanVariants(
-                canvasImageData(padded),
-                ["QRCode"],
-                "黒ラベル内QR・最近傍4倍"
-              );
-              acceptResults(rescueResults);
-
-              if (!qrData) {
-                const histogramResults = await scanImage(
-                  canvasImageData(padded),
-                  ["QRCode"],
-                  "黒ラベル内QR・GlobalHistogram・最近傍4倍",
-                  "GlobalHistogram"
-                );
-                acceptResults(histogramResults);
-              }
-
-            }
-          }
-          profileRecord("黒ラベル内QRの追加解析", stageStartedAt);
-        }
-
-        // 拡大後の1px補修では足りない細かな印字欠けを、切出し原寸で補う。
-        if (!qrData) {
-          const label = findQrLabelPanel(sourceCanvas);
-          if (label?.sourceRect) {
-            const candidate = cropCanvasFraction(label, 0.42, 0, 0.58, 1);
-            const binary = binarizeLightOnDark(canvasImageData(candidate), -20);
-            const repaired = expandDarkPixelsSquare(binary, 1);
-            const hits = await scanImage(repaired, ["QRCode"], "全体画像・黒ラベル原寸セル補修",
-              "BoolCast", { tryDenoise: false, tryDownscale: false, tryInvert: false });
-            const offsetX = label.sourceRect.left + Math.floor(label.width * 0.42);
-            const offsetY = label.sourceRect.top;
-            acceptResults(hits.map(result => ({ ...result,
-              position: result.position ? Object.fromEntries(Object.entries(result.position).map(([key, point]) =>
-                [key, { x: point.x + offsetX, y: point.y + offsetY }])) : result.position
-            })));
-          }
+          acceptResults(await readNormalizedQr(file, sourceCanvas));
+          profileRecord("原画像QR正規化", stageStartedAt);
         }
 
         if (!barcodeData) {
@@ -1105,6 +912,69 @@
         resetButton.disabled = false;
       }
     }
+
+    // QR専用の正規化。写真全体を縮小してから拡大せず、原画像のラベル領域を使う。
+    function normalizedQrPixels(canvas, targetWidth) {
+      const src = canvasImageData(canvas), sw = src.width, sh = src.height;
+      const width = Math.min(targetWidth, sw), height = Math.max(1, Math.round(sh * width / sw));
+      let gray = new Float32Array(width * height);
+      // 面積平均で縮小する。Canvasの補間実装に依存しない。
+      for (let y=0;y<height;y++) for(let x=0;x<width;x++) {
+        const x0=x*sw/width,x1=(x+1)*sw/width,y0=y*sh/height,y1=(y+1)*sh/height;
+        let total=0,weight=0;
+        for(let sy=Math.floor(y0);sy<Math.ceil(y1);sy++)for(let sx=Math.floor(x0);sx<Math.ceil(x1);sx++){
+          const w=(Math.min(x1,sx+1)-Math.max(x0,sx))*(Math.min(y1,sy+1)-Math.max(y0,sy));
+          const i=(Math.min(sh-1,sy)*sw+Math.min(sw-1,sx))*4;
+          total+=(.299*src.data[i]+.587*src.data[i+1]+.114*src.data[i+2])*w;weight+=w;
+        }gray[y*width+x]=total/weight;
+      }
+      // 微細な印字模様を抑える固定ガウス平滑化。CSS filterを使わずSafariでも同じ計算。
+      for(let pass=0;pass<2;pass++){
+        const tmp=new Float32Array(gray.length),out=new Float32Array(gray.length);
+        for(let y=0;y<height;y++)for(let x=0;x<width;x++)tmp[y*width+x]=(gray[y*width+Math.max(0,x-1)]+2*gray[y*width+x]+gray[y*width+Math.min(width-1,x+1)])/4;
+        for(let y=0;y<height;y++)for(let x=0;x<width;x++)out[y*width+x]=(tmp[Math.max(0,y-1)*width+x]+2*tmp[y*width+x]+tmp[Math.min(height-1,y+1)*width+x])/4;
+        gray=out;
+      }
+      const out=new ImageData(width,height);
+      for(let p=0;p<gray.length;p++){out.data[p*4]=out.data[p*4+1]=out.data[p*4+2]=Math.round(gray[p]);out.data[p*4+3]=255;}
+      return out;
+    }
+
+    async function readNormalizedQr(file, canvas) {
+      const panel=findQrLabelPanel(canvas);
+      if(!panel?.sourceRect) return [];
+      const image=await loadImage(file),r=panel.sourceRect;
+      // EXIF付きImageの9引数drawImageはWebKitで切出し位置がずれるため、先に向きを確定する。
+      const decoded=document.createElement('canvas');
+      const nativeScale=Math.min(1,4096/Math.max(image.naturalWidth,image.naturalHeight),Math.sqrt(12000000/(image.naturalWidth*image.naturalHeight)));
+      decoded.width=Math.round(image.naturalWidth*nativeScale);decoded.height=Math.round(image.naturalHeight*nativeScale);
+      decoded.getContext('2d').drawImage(image,0,0,decoded.width,decoded.height);
+      const scaleX=decoded.width/canvas.width,scaleY=decoded.height/canvas.height;
+      const sx=Math.floor((r.left+r.width*0.42)*scaleX),sy=Math.floor(r.top*scaleY);
+      const sw=Math.min(decoded.width-sx,Math.ceil(r.width*0.58*scaleX));
+      const sh=Math.min(decoded.height-sy,Math.ceil(r.height*scaleY));
+      const native=document.createElement('canvas');native.width=sw;native.height=sh;
+      native.getContext('2d',{willReadFrequently:true}).drawImage(decoded,sx,sy,sw,sh,0,0,sw,sh);
+      decoded.width=1;decoded.height=1;
+      try {
+        const nativeHits=await scanImage(canvasImageData(native),['QRCode'],'全体画像・原画像QR直接解析','LocalAverage',{tryDenoise:false,tryDownscale:false});
+        if(nativeHits.length)return nativeHits.map(hit=>({...hit,position:hit.position?Object.fromEntries(Object.entries(hit.position).map(([key,p])=>[key,{x:(sx+p.x)/scaleX,y:(sy+p.y)/scaleY}])):hit.position}));
+        for(const width of [400,600,900]) {
+          const normalized=normalizedQrPixels(native,width);
+          // 明るさは画像自身の分布から判定。白抜き印字の薄い端も残す。
+          for(const offset of [-20,0]) {
+            const binary=binarizeLightOnDark(normalized,offset);
+            const hits=await scanImage(binary,['QRCode'],'全体画像・原画像QR正規化','BoolCast',
+              {tryDenoise:false,tryDownscale:false,tryInvert:false});
+            if(hits.length) return hits.map(hit=>({...hit,position:hit.position?Object.fromEntries(
+              Object.entries(hit.position).map(([key,p])=>[key,{x:(sx+p.x*sw/normalized.width)/scaleX,y:(sy+p.y*sh/normalized.height)/scaleY}])):hit.position}));
+          }
+        }
+        return [];
+      } finally {native.width=1;native.height=1;}
+    }
+
+
 
     async function fileToCanvas(file) {
       const image = await loadImage(file);
@@ -1575,7 +1445,7 @@
       // Q/Oのような紛らわしい文字は、枠を除いた8文字で独立に再確認する。
       // 期待値を認識条件に使わず、異なるサイズで同じ文字列を2回読めた場合だけ採用。
       if (partNo !== qr.partNo) {
-        for (const { panel } of darkPartPanels) {
+        for (const { panel } of (darkPartPanels.length ? darkPartPanels : [{panel: partRegion}])) {
           const isolatedPart = await recognizeIsolatedDarkPart(worker, panel);
           if (isolatedPart) { partNo = isolatedPart; break; }
         }
