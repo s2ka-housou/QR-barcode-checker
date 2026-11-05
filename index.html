@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-10-27 r11</p>
+    <p class="note" style="text-align:center">更新版：2026-11-05 r12</p>
   </main>
 
   <script>
@@ -468,7 +468,7 @@
         if (!enabled) return null;
         try {
           const event = { id: crypto.randomUUID(), startedAt: new Date().toISOString(),
-            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-10-27 r11" };
+            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-11-05 r12" };
           put(event); void flush(); return event;
         } catch { return null; }
       }
@@ -774,7 +774,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-10-27 r11", reasons, expected, actual,
+        appVersion: "2026-11-05 r12", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -1043,6 +1043,24 @@
             }
           }
           profileRecord("黒ラベル内QRの追加解析", stageStartedAt);
+        }
+
+        // 拡大後の1px補修では足りない細かな印字欠けを、切出し原寸で補う。
+        if (!qrData) {
+          const label = findQrLabelPanel(sourceCanvas);
+          if (label?.sourceRect) {
+            const candidate = cropCanvasFraction(label, 0.42, 0, 0.58, 1);
+            const binary = binarizeLightOnDark(canvasImageData(candidate), -20);
+            const repaired = expandDarkPixelsSquare(binary, 1);
+            const hits = await scanImage(repaired, ["QRCode"], "全体画像・黒ラベル原寸セル補修",
+              "BoolCast", { tryDenoise: false, tryDownscale: false, tryInvert: false });
+            const offsetX = label.sourceRect.left + Math.floor(label.width * 0.42);
+            const offsetY = label.sourceRect.top;
+            acceptResults(hits.map(result => ({ ...result,
+              position: result.position ? Object.fromEntries(Object.entries(result.position).map(([key, point]) =>
+                [key, { x: point.x + offsetX, y: point.y + offsetY }])) : result.position
+            })));
+          }
         }
 
         if (!barcodeData) {
