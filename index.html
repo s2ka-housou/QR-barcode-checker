@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-11-05 r13</p>
+    <p class="note" style="text-align:center">更新版：2026-11-16 r14</p>
   </main>
 
   <script>
@@ -468,7 +468,7 @@
         if (!enabled) return null;
         try {
           const event = { id: crypto.randomUUID(), startedAt: new Date().toISOString(),
-            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-11-05 r13" };
+            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-11-16 r14" };
           put(event); void flush(); return event;
         } catch { return null; }
       }
@@ -774,7 +774,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-11-05 r13", reasons, expected, actual,
+        appVersion: "2026-11-16 r14", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -941,40 +941,56 @@
     }
 
     async function readNormalizedQr(file, canvas) {
-      const panel=findQrLabelPanel(canvas);
-      if(!panel?.sourceRect) return [];
-      const image=await loadImage(file),r=panel.sourceRect;
-      // EXIF付きImageの9引数drawImageはWebKitで切出し位置がずれるため、先に向きを確定する。
-      const decoded=document.createElement('canvas');
-      const nativeScale=Math.min(1,4096/Math.max(image.naturalWidth,image.naturalHeight),Math.sqrt(12000000/(image.naturalWidth*image.naturalHeight)));
-      decoded.width=Math.round(image.naturalWidth*nativeScale);decoded.height=Math.round(image.naturalHeight*nativeScale);
-      decoded.getContext('2d').drawImage(image,0,0,decoded.width,decoded.height);
-      const scaleX=decoded.width/canvas.width,scaleY=decoded.height/canvas.height;
-      const sx=Math.floor((r.left+r.width*0.42)*scaleX),sy=Math.floor(r.top*scaleY);
-      const sw=Math.min(decoded.width-sx,Math.ceil(r.width*0.58*scaleX));
-      const sh=Math.min(decoded.height-sy,Math.ceil(r.height*scaleY));
-      const native=document.createElement('canvas');native.width=sw;native.height=sh;
-      native.getContext('2d',{willReadFrequently:true}).drawImage(decoded,sx,sy,sw,sh,0,0,sw,sh);
-      decoded.width=1;decoded.height=1;
+      const panels = findQrLabelCandidates(canvas);
+      if (!panels.length) return [];
+      const decoded = document.createElement("canvas");
       try {
-        const nativeHits=await scanImage(canvasImageData(native),['QRCode'],'全体画像・原画像QR直接解析','LocalAverage',{tryDenoise:false,tryDownscale:false});
-        if(nativeHits.length)return nativeHits.map(hit=>({...hit,position:hit.position?Object.fromEntries(Object.entries(hit.position).map(([key,p])=>[key,{x:(sx+p.x)/scaleX,y:(sy+p.y)/scaleY}])):hit.position}));
-        for(const width of [400,600,900]) {
-          const normalized=normalizedQrPixels(native,width);
-          // 明るさは画像自身の分布から判定。白抜き印字の薄い端も残す。
-          for(const offset of [-20,0]) {
-            const binary=binarizeLightOnDark(normalized,offset);
-            const hits=await scanImage(binary,['QRCode'],'全体画像・原画像QR正規化','BoolCast',
-              {tryDenoise:false,tryDownscale:false,tryInvert:false});
-            if(hits.length) return hits.map(hit=>({...hit,position:hit.position?Object.fromEntries(
-              Object.entries(hit.position).map(([key,p])=>[key,{x:(sx+p.x*sw/normalized.width)/scaleX,y:(sy+p.y*sh/normalized.height)/scaleY}])):hit.position}));
-          }
+        const image = await loadImage(file);
+        // EXIFの向きを先に確定し、原画像の読み込みは候補間で共有する。
+        const nativeScale = Math.min(1, 4096 / Math.max(image.naturalWidth, image.naturalHeight),
+          Math.sqrt(12000000 / (image.naturalWidth * image.naturalHeight)));
+        decoded.width = Math.round(image.naturalWidth * nativeScale);
+        decoded.height = Math.round(image.naturalHeight * nativeScale);
+        decoded.getContext("2d").drawImage(image, 0, 0, decoded.width, decoded.height);
+        const scaleX = decoded.width / canvas.width, scaleY = decoded.height / canvas.height;
+
+        for (const panel of panels) {
+          const r = panel.sourceRect;
+          const sx = Math.floor((r.left + r.width * 0.42) * scaleX);
+          const sy = Math.floor(r.top * scaleY);
+          const sw = Math.min(decoded.width - sx, Math.ceil(r.width * 0.58 * scaleX));
+          const sh = Math.min(decoded.height - sy, Math.ceil(r.height * scaleY));
+          if (sw < 1 || sh < 1) continue;
+          const native = document.createElement("canvas");
+          native.width = sw; native.height = sh;
+          try {
+            native.getContext("2d", { willReadFrequently: true })
+              .drawImage(decoded, sx, sy, sw, sh, 0, 0, sw, sh);
+            const mapHits = (hits, width = sw, height = sh) => hits.map(hit => ({ ...hit,
+              position: hit.position ? Object.fromEntries(Object.entries(hit.position).map(([key, p]) =>
+                [key, { x: (sx + p.x * sw / width) / scaleX,
+                  y: (sy + p.y * sh / height) / scaleY }])) : hit.position
+            }));
+            const nativeHits = await scanImage(canvasImageData(native), ["QRCode"],
+              "全体画像・原画像QR直接解析", "LocalAverage", { tryDenoise: false, tryDownscale: false });
+            if (nativeHits.length) return mapHits(nativeHits);
+            for (const width of [400, 600, 900]) {
+              const normalized = normalizedQrPixels(native, width);
+              for (const offset of [-20, 0]) {
+                const hits = await scanImage(binarizeLightOnDark(normalized, offset), ["QRCode"],
+                  "全体画像・原画像QR正規化", "BoolCast",
+                  { tryDenoise: false, tryDownscale: false, tryInvert: false });
+                if (hits.length) return mapHits(hits, normalized.width, normalized.height);
+              }
+            }
+          } finally { native.width = native.height = 1; }
         }
         return [];
-      } finally {native.width=1;native.height=1;}
+      } finally {
+        decoded.width = decoded.height = 1;
+        for (const panel of panels) panel.width = panel.height = 1;
+      }
     }
-
-
 
     async function fileToCanvas(file) {
       const image = await loadImage(file);
@@ -2151,10 +2167,10 @@
       return cropCanvasRect(canvas, 0, 0, canvas.width, bottom);
     }
 
-    function findDarkTextPanel(canvas, darkThreshold = 92, bridgeTextGaps = false) {
+    function findDarkTextPanel(canvas, darkThreshold = 92, bridgeTextGaps = false, collectCandidates = false) {
       const width = canvas.width;
       const height = canvas.height;
-      if (width < 40 || height < 30) return null;
+      if (width < 40 || height < 30) return collectCandidates ? [] : null;
 
       const context = canvas.getContext("2d", { willReadFrequently: true });
       const pixels = context.getImageData(0, 0, width, height).data;
@@ -2180,60 +2196,66 @@
       const rowRuns = findDenseRuns(rowDensity, 0.2, allowedGap);
       const minimumRows = Math.max(3, Math.floor(height * 0.065 / step));
       const usableRows = rowRuns.filter(run => run.end - run.start + 1 >= minimumRows);
-      if (!usableRows.length) return null;
+      if (!usableRows.length) return collectCandidates ? [] : null;
 
-      const bestRow = usableRows.reduce((best, run) => {
-        const density = averageRange(rowDensity, run.start, run.end);
-        const score = (run.end - run.start + 1) * density;
-        return !best || score > best.score ? { ...run, score } : best;
-      }, null);
+      // 黒さの順位だけで決めず、QR探索では全候補を後段の復号で確認する。
+      const rankedRows = usableRows.map(run => ({ ...run,
+        score: (run.end - run.start + 1) * averageRange(rowDensity, run.start, run.end)
+      })).sort((a, b) => b.score - a.score);
+      const candidates = [];
+      for (const bestRow of (collectCandidates ? rankedRows : rankedRows.slice(0, 1))) {
+        const top = bestRow.start * step;
+        const bottom = Math.min(height, (bestRow.end + 1) * step);
+        const sampledRows = Math.max(1, Math.ceil((bottom - top) / step));
+        const columnDensity = [];
 
-      const top = bestRow.start * step;
-      const bottom = Math.min(height, (bestRow.end + 1) * step);
-      const sampledRows = Math.max(1, Math.ceil((bottom - top) / step));
-      const columnDensity = [];
-
-      for (let x = 0; x < width; x += step) {
-        let dark = 0;
-        for (let y = top; y < bottom; y += step) {
-          const index = (y * width + x) * 4;
-          const gray = 0.299 * pixels[index] +
-            0.587 * pixels[index + 1] +
-            0.114 * pixels[index + 2];
-          if (gray < darkThreshold) dark += 1;
+        for (let x = 0; x < width; x += step) {
+          let dark = 0;
+          for (let y = top; y < bottom; y += step) {
+            const index = (y * width + x) * 4;
+            const gray = 0.299 * pixels[index] +
+              0.587 * pixels[index + 1] +
+              0.114 * pixels[index + 2];
+            if (gray < darkThreshold) dark += 1;
+          }
+          columnDensity.push(dark / sampledRows);
         }
-        columnDensity.push(dark / sampledRows);
+
+        const columnRuns = findDenseRuns(columnDensity, 0.45, 3);
+        const minimumColumns = Math.max(4, Math.floor(width * 0.22 / step));
+        const usableColumns = columnRuns.filter(run => run.end - run.start + 1 >= minimumColumns);
+        if (!usableColumns.length) { if (collectCandidates) continue; return null; }
+
+        const rankedColumns = usableColumns.sort((a, b) => (b.end - b.start) - (a.end - a.start));
+        for (const bestColumn of (collectCandidates ? rankedColumns : rankedColumns.slice(0, 1))) {
+          const left = bestColumn.start * step;
+          const right = Math.min(width, (bestColumn.end + 1) * step);
+          const marginX = Math.round((right - left) * 0.025);
+          const marginY = Math.round((bottom - top) * 0.08);
+          const cropLeft = Math.max(0, left - marginX);
+          const cropTop = Math.max(0, top - marginY);
+          const cropRight = Math.min(width, right + marginX);
+          const cropBottom = Math.min(height, bottom + marginY);
+          const panel = cropCanvasRect(
+            canvas,
+            cropLeft,
+            cropTop,
+            cropRight - cropLeft,
+            cropBottom - cropTop
+          );
+          panel.sourceRect = {
+            left: cropLeft,
+            top: cropTop,
+            width: cropRight - cropLeft,
+            height: cropBottom - cropTop
+          };
+          if (!collectCandidates) return panel;
+          candidates.push(panel);
+          // 小さな候補が多数あっても処理時間・メモリを制限する。
+          if (candidates.length >= 8) return candidates;
+        }
       }
-
-      const columnRuns = findDenseRuns(columnDensity, 0.45, 3);
-      const minimumColumns = Math.max(4, Math.floor(width * 0.22 / step));
-      const usableColumns = columnRuns.filter(run => run.end - run.start + 1 >= minimumColumns);
-      if (!usableColumns.length) return null;
-
-      const bestColumn = usableColumns.reduce((best, run) =>
-        !best || run.end - run.start > best.end - best.start ? run : best, null);
-      const left = bestColumn.start * step;
-      const right = Math.min(width, (bestColumn.end + 1) * step);
-      const marginX = Math.round((right - left) * 0.025);
-      const marginY = Math.round((bottom - top) * 0.08);
-      const cropLeft = Math.max(0, left - marginX);
-      const cropTop = Math.max(0, top - marginY);
-      const cropRight = Math.min(width, right + marginX);
-      const cropBottom = Math.min(height, bottom + marginY);
-      const panel = cropCanvasRect(
-        canvas,
-        cropLeft,
-        cropTop,
-        cropRight - cropLeft,
-        cropBottom - cropTop
-      );
-      panel.sourceRect = {
-        left: cropLeft,
-        top: cropTop,
-        width: cropRight - cropLeft,
-        height: cropBottom - cropTop
-      };
-      return panel;
+      return collectCandidates ? candidates : null;
     }
 
     function findQrLabelPanel(canvas) {
@@ -2259,6 +2281,33 @@
         height: panel.sourceRect.height
       };
       return panel;
+    }
+
+    function findQrLabelCandidates(canvas) {
+      // 品番表示を避けて画像の下側を検索する。検索下端を固定割合で
+      // 打ち切るとQRラベルが途中で欠けるため、画像下端まで含める。
+      const searchLeft = Math.floor(canvas.width * 0.10);
+      const searchTop = Math.floor(canvas.height * 0.28);
+      const searchWidth = Math.ceil(canvas.width * 0.88);
+      const searchHeight = canvas.height - searchTop;
+      const search = cropCanvasRect(
+        canvas,
+        searchLeft,
+        searchTop,
+        searchWidth,
+        searchHeight
+      );
+      const panels = findDarkTextPanel(search, 92, false, true);
+      for (const panel of panels) {
+      panel.sourceRect = {
+        left: searchLeft + panel.sourceRect.left,
+        top: searchTop + panel.sourceRect.top,
+        width: panel.sourceRect.width,
+        height: panel.sourceRect.height
+      };
+      }
+      search.width = search.height = 1;
+      return panels;
     }
 
     function findDenseRuns(values, threshold, allowedGap) {
