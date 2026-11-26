@@ -385,7 +385,7 @@
     </section>
 
     <button id="btn-reset" class="secondary" type="button" hidden>別の写真を選択</button>
-    <p class="note" style="text-align:center">更新版：2026-11-16 r14</p>
+    <p class="note" style="text-align:center">更新版：2026-11-26 r15</p>
   </main>
 
   <script>
@@ -468,7 +468,7 @@
         if (!enabled) return null;
         try {
           const event = { id: crypto.randomUUID(), startedAt: new Date().toISOString(),
-            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-11-16 r14" };
+            revision: 0, outcome: "STARTED", lot: "", appVersion: "2026-11-26 r15" };
           put(event); void flush(); return event;
         } catch { return null; }
       }
@@ -774,7 +774,7 @@
           (Number(c) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(c) / 4).toString(16));
       const report = {
         schemaVersion: 1, id: uuid, capturedAt: new Date().toISOString(), outcome: "NG",
-        appVersion: "2026-11-16 r14", reasons, expected, actual,
+        appVersion: "2026-11-26 r15", reasons, expected, actual,
         qrText: qrData?.text || "", itfText: barcodeData?.text || "",
         message: document.getElementById("status").textContent,
         originalFile: { name: file.name, type: file.type, size: file.size, lastModified: file.lastModified },
@@ -1259,6 +1259,65 @@
       return String(value).replace(/\s/g, "");
     }
 
+    // 縮小画像上の黒い連結領域から品番ラベルと上辺の傾きを検出する。
+    function deskewPartCandidates(region) {
+      const scale = Math.min(1, 700 / region.width);
+      const small = upscaleCanvas(region, scale, true);
+      const {width:w,height:h,data} = canvasImageData(small);
+      const seen = new Uint8Array(w*h), queue = new Int32Array(w*h);
+      const dark = p => .299*data[p*4]+.587*data[p*4+1]+.114*data[p*4+2]<92;
+      const candidates=[];
+      for(let seed=0;seed<w*h;seed++) {
+        if(seen[seed]||!dark(seed)) continue;
+        let head=0,tail=1,left=seed%w,right=left,top=Math.floor(seed/w),bottom=top;
+        queue[0]=seed;seen[seed]=1;
+        while(head<tail) {
+          const p=queue[head++],x=p%w,y=Math.floor(p/w);
+          left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);
+          for(const [dx,dy] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+            const nx=x+dx,ny=y+dy,n=ny*w+nx;
+            if(nx>=0&&nx<w&&ny>=0&&ny<h&&!seen[n]&&dark(n)){seen[n]=1;queue[tail++]=n;}
+          }
+        }
+        const bw=right-left+1,bh=bottom-top+1;
+        if(bw<w*.15||bh<15||bw/bh<2||bw/bh>10||tail/(bw*bh)<.45)continue;
+        const edges=new Int32Array(bw).fill(h);
+        for(let i=0;i<tail;i++){const p=queue[i];edges[p%w-left]=Math.min(edges[p%w-left],Math.floor(p/w));}
+        const points=[];for(let x=Math.ceil(bw*.15);x<bw*.85;x++)if(edges[x]<h)points.push([x,edges[x]]);
+        const mx=points.reduce((s,p)=>s+p[0],0)/points.length,my=points.reduce((s,p)=>s+p[1],0)/points.length;
+        const slope=points.reduce((s,p)=>s+(p[0]-mx)*(p[1]-my),0)/points.reduce((s,p)=>s+(p[0]-mx)**2,0);
+        const residual=Math.sqrt(points.reduce((s,p)=>s+(p[1]-my-slope*(p[0]-mx))**2,0)/points.length);
+        const angle=Math.atan(slope);
+        if(!Number.isFinite(angle)||Math.abs(angle)>Math.PI/12||residual>3)continue;
+        candidates.push({left,top,bw,bh,angle,score:tail,residual});
+      }
+      small.width=small.height=1;
+      return candidates.sort((a,b)=>b.score-a.score).slice(0,3).map(r=>{
+        const sx=Math.max(0,Math.floor((r.left-r.bw*.06)/scale));
+        const sy=Math.max(0,Math.floor((r.top-r.bh*.12)/scale));
+        const ex=Math.min(region.width,Math.ceil((r.left+r.bw*1.06)/scale));
+        const ey=Math.min(region.height,Math.ceil((r.top+r.bh*1.12)/scale));
+        const crop=cropCanvasRect(region,sx,sy,ex-sx,ey-sy),out=document.createElement('canvas');
+        const co=Math.cos(r.angle),si=Math.abs(Math.sin(r.angle));
+        out.width=Math.ceil(crop.width*co+crop.height*si);out.height=Math.ceil(crop.height*co+crop.width*si);
+        const ctx=out.getContext('2d');ctx.fillStyle='#b9a077';ctx.fillRect(0,0,out.width,out.height);
+        ctx.translate(out.width/2,out.height/2);ctx.rotate(-r.angle);ctx.drawImage(crop,-crop.width/2,-crop.height/2);
+        crop.width=crop.height=1;out.deskewAngle=r.angle*180/Math.PI;return out;
+      });
+    }
+
+    async function recognizeDeskewedPart(worker, region) {
+      const start=performance.now(),candidates=deskewPartCandidates(region);
+      profileRecord("品番ラベル検出・傾き補正", start);
+      try {
+        for(const candidate of candidates) {
+          const value=await recognizeIsolatedDarkPart(worker,candidate);
+          if(value)return value;
+        }
+        return '';
+      } finally {for(const c of candidates)c.width=c.height=1;}
+    }
+
     async function readOcrValues(canvas, qrResult) {
       const qr = parseQRCode(qrResult.text);
       const workerStartedAt = performance.now();
@@ -1282,9 +1341,10 @@
             )
           : canvas;
 
-      // 白地・段ボール地の品番を、加工なしの広域OCRで最初に1回だけ確認する。
+      // 黒い品番ラベルを検出・水平補正して先に読む。読めない場合は従来の広域OCRへ進む。
       // ここでQRの品番と一致すれば、黒背景用の複数回OCRは実行しない。
-      let partNo = await recognizeCodeWithFallback(
+      const deskewedPartNo = await recognizeDeskewedPart(worker, partRegion);
+      let partNo = deskewedPartNo || await recognizeCodeWithFallback(
         worker,
         [upscaleCanvas(partRegion, 1.15)],
         "11",
@@ -1293,178 +1353,182 @@
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
       );
 
-      // 枠線や商品説明が品番へ混ざる場合、同じ行の独立した8文字だけを読む。
-      // 候補の位置・文字数は画像から検出し、QRの期待文字列は検出に使用しない。
-      if (partNo !== qr.partNo) {
-        for (const line of findPrintedPartLines(partRegion)) {
-          const candidate = await recognizeCodeWithFallback(worker, [
-            padCanvas(prepareBinaryForOcr(line.isolated, false, ocrScaleForLine(line.isolated, 135), true), 0.12, 255),
-            padCanvas(prepareBinaryForOcr(line, false, ocrScaleForLine(line, 135), true), 0.12, 255),
-            padCanvas(prepareBinaryForOcr(line, false, ocrScaleForLine(line, 200), true), 0.12, 255)
-          ], "7", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-          if (candidate === qr.partNo) { partNo = candidate; break; }
-          if (!partNo && candidate) partNo = candidate;
-        }
-      }
-
-      // 広域OCRで一致しなかった場合だけ、黒い品番ラベルを専用処理する。
-      // 4種類の画像加工×3種類の認識モードは、黒背景品番の精度維持のため残す。
-      const darkPartPanels = [];
-      if (partNo !== qr.partNo) {
-        for (const threshold of [92, 130]) {
-          let candidate = findDarkTextPanel(partRegion, threshold);
-          // 白抜き文字で黒枠が横帯に分かれた場合だけ、短い隙間をつないで再検出する。
-          if (!candidate || !isMostlyDarkCanvas(candidate)) {
-            candidate = findDarkTextPanel(partRegion, threshold, true);
-          }
-          if (!candidate || !isMostlyDarkCanvas(candidate)) continue;
-          const duplicate = darkPartPanels.some(entry =>
-            entry.panel.sourceRect && candidate.sourceRect &&
-            Math.abs(entry.panel.sourceRect.left - candidate.sourceRect.left) < 8 &&
-            Math.abs(entry.panel.sourceRect.top - candidate.sourceRect.top) < 8 &&
-            Math.abs(entry.panel.sourceRect.width - candidate.sourceRect.width) < 12 &&
-            Math.abs(entry.panel.sourceRect.height - candidate.sourceRect.height) < 12
-          );
-          if (!duplicate) {
-            darkPartPanels.push({
-              panel: candidate,
-              lightThreshold: threshold === 92 ? 118 : 145
-            });
+      // 2サイズで一致した独立OCR値は、QRと違っていても保持してNG判定へ渡す。
+      if (!deskewedPartNo) {
+        // 枠線や商品説明が品番へ混ざる場合、同じ行の独立した8文字だけを読む。
+        // 候補の位置・文字数は画像から検出し、QRの期待文字列は検出に使用しない。
+        if (partNo !== qr.partNo) {
+          for (const line of findPrintedPartLines(partRegion)) {
+            const candidate = await recognizeCodeWithFallback(worker, [
+              padCanvas(prepareBinaryForOcr(line.isolated, false, ocrScaleForLine(line.isolated, 135), true), 0.12, 255),
+              padCanvas(prepareBinaryForOcr(line, false, ocrScaleForLine(line, 135), true), 0.12, 255),
+              padCanvas(prepareBinaryForOcr(line, false, ocrScaleForLine(line, 200), true), 0.12, 255)
+            ], "7", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+            if (candidate === qr.partNo) { partNo = candidate; break; }
+            if (!partNo && candidate) partNo = candidate;
           }
         }
-      }
-      for (const { panel: darkPartPanel, lightThreshold } of darkPartPanels) {
-        const tightPartPanel = cropLightTextBounds(darkPartPanel, lightThreshold) || darkPartPanel;
-        const darkPartScale = ocrScaleForLine(tightPartPanel, 135);
-        const focusedPartVariants = [
-          padCanvas(prepareBinaryForOcr(tightPartPanel, true, darkPartScale), 0.12, 255),
-          padCanvas(prepareContrastForOcr(tightPartPanel, true, darkPartScale), 0.12, 255),
-          padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, darkPartScale, 95), 0.12, 255),
-          padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, darkPartScale, 135), 0.12, 255)
-        ];
-        partNo = await recognizeCodeWithFallback(
-          worker,
-          focusedPartVariants,
-          "7",
-          "part",
-          qr.partNo,
-          "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        );
-        if (partNo !== qr.partNo) {
-          const singleWordPart = await recognizeCodeWithFallback(
-            worker,
-            focusedPartVariants,
-            "8",
-            "part",
-            qr.partNo,
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-          );
-          if (singleWordPart === qr.partNo || !partNo) partNo = singleWordPart;
-        }
-        if (partNo !== qr.partNo) {
-          const rawLinePart = await recognizeCodeWithFallback(
-            worker,
-            focusedPartVariants,
-            "13",
-            "part",
-            qr.partNo,
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-          );
-          if (rawLinePart === qr.partNo || !partNo) partNo = rawLinePart;
-        }
-        if (partNo !== qr.partNo) {
-          const segmentedPart = await recognizeSegmentedPartNumber(
-            worker,
-            prepareBinaryForOcr(tightPartPanel, true, darkPartScale),
-            qr.partNo
-          );
-          if (segmentedPart === qr.partNo || !partNo) partNo = segmentedPart;
-        }
-        if (partNo === qr.partNo) break;
-      }
 
-      // 最初の広域OCRと黒背景専用処理で一致しない場合だけ、補正した広域画像を試す。
-      if (partNo !== qr.partNo) {
-        const broadPart = await recognizeCodeWithFallback(worker, [
-          prepareContrastForOcr(partRegion, false, 1),
-          prepareContrastForOcr(partRegion, true, 1),
-          prepareBinaryForOcr(partRegion, false, 1.35),
-          prepareBinaryForOcr(partRegion, true, 1.35)
-        ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-        if (broadPart === qr.partNo || !partNo) partNo = broadPart;
-      }
-
-      // 段ボール地へ直接印刷された品番は、上側を横方向に重ねて分割し、
-      // 罫線や商品説明を避けながら最も濃い文字行だけを読む。
-      if (partNo !== qr.partNo && !darkPartPanels.length) {
-        const horizontalRegions = [
-          // 右寄せの品番枠を左右とも欠かさず含める。Image (10)では従来の
-          // 中央領域は末尾、右領域は先頭Qを切っていたため、この範囲を先に試す。
-          { canvas: cropCanvasFraction(partRegion, 0.40, 0, 0.60, 1), targetHeight: 200 },
-          { canvas: cropCanvasFraction(partRegion, 0, 0, 0.40, 1), targetHeight: 125 },
-          { canvas: cropCanvasFraction(partRegion, 0.22, 0, 0.60, 1), targetHeight: 125 },
-          { canvas: cropCanvasFraction(partRegion, 0.55, 0, 0.45, 1), targetHeight: 125 }
-        ];
-
-        for (const { canvas: region, targetHeight } of horizontalRegions) {
-          const textLine = cropDarkTextLineBounds(region);
-          if (!textLine) continue;
-          const textLineScale = ocrScaleForLine(textLine, targetHeight);
-          const lineVariants = [
-            padCanvas(prepareBinaryForOcr(textLine, false, textLineScale), 0.14, 255),
-            padCanvas(prepareContrastForOcr(textLine, false, textLineScale), 0.14, 255),
-            padCanvas(prepareBinaryForOcr(textLine, false, textLineScale, true), 0.14, 255)
+        // 広域OCRで一致しなかった場合だけ、黒い品番ラベルを専用処理する。
+        // 4種類の画像加工×3種類の認識モードは、黒背景品番の精度維持のため残す。
+        const darkPartPanels = [];
+        if (partNo !== qr.partNo) {
+          for (const threshold of [92, 130]) {
+            let candidate = findDarkTextPanel(partRegion, threshold);
+            // 白抜き文字で黒枠が横帯に分かれた場合だけ、短い隙間をつないで再検出する。
+            if (!candidate || !isMostlyDarkCanvas(candidate)) {
+              candidate = findDarkTextPanel(partRegion, threshold, true);
+            }
+            if (!candidate || !isMostlyDarkCanvas(candidate)) continue;
+            const duplicate = darkPartPanels.some(entry =>
+              entry.panel.sourceRect && candidate.sourceRect &&
+              Math.abs(entry.panel.sourceRect.left - candidate.sourceRect.left) < 8 &&
+              Math.abs(entry.panel.sourceRect.top - candidate.sourceRect.top) < 8 &&
+              Math.abs(entry.panel.sourceRect.width - candidate.sourceRect.width) < 12 &&
+              Math.abs(entry.panel.sourceRect.height - candidate.sourceRect.height) < 12
+            );
+            if (!duplicate) {
+              darkPartPanels.push({
+                panel: candidate,
+                lightThreshold: threshold === 92 ? 118 : 145
+              });
+            }
+          }
+        }
+        for (const { panel: darkPartPanel, lightThreshold } of darkPartPanels) {
+          const tightPartPanel = cropLightTextBounds(darkPartPanel, lightThreshold) || darkPartPanel;
+          const darkPartScale = ocrScaleForLine(tightPartPanel, 135);
+          const focusedPartVariants = [
+            padCanvas(prepareBinaryForOcr(tightPartPanel, true, darkPartScale), 0.12, 255),
+            padCanvas(prepareContrastForOcr(tightPartPanel, true, darkPartScale), 0.12, 255),
+            padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, darkPartScale, 95), 0.12, 255),
+            padCanvas(prepareFixedBinaryForOcr(tightPartPanel, true, darkPartScale, 135), 0.12, 255)
           ];
-          let linePart = await recognizeCodeWithFallback(
+          partNo = await recognizeCodeWithFallback(
             worker,
-            lineVariants,
+            focusedPartVariants,
             "7",
             "part",
             qr.partNo,
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
           );
-          if (linePart !== qr.partNo) {
-            const wordPart = await recognizeCodeWithFallback(
+          if (partNo !== qr.partNo) {
+            const singleWordPart = await recognizeCodeWithFallback(
               worker,
-              lineVariants,
+              focusedPartVariants,
               "8",
               "part",
               qr.partNo,
               "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
             );
-            if (wordPart === qr.partNo || !linePart) linePart = wordPart;
+            if (singleWordPart === qr.partNo || !partNo) partNo = singleWordPart;
           }
-          if (linePart !== qr.partNo) {
+          if (partNo !== qr.partNo) {
+            const rawLinePart = await recognizeCodeWithFallback(
+              worker,
+              focusedPartVariants,
+              "13",
+              "part",
+              qr.partNo,
+              "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            );
+            if (rawLinePart === qr.partNo || !partNo) partNo = rawLinePart;
+          }
+          if (partNo !== qr.partNo) {
             const segmentedPart = await recognizeSegmentedPartNumber(
               worker,
-              lineVariants[0],
+              prepareBinaryForOcr(tightPartPanel, true, darkPartScale),
               qr.partNo
             );
-            if (segmentedPart === qr.partNo || !linePart) linePart = segmentedPart;
+            if (segmentedPart === qr.partNo || !partNo) partNo = segmentedPart;
           }
-          if (linePart === qr.partNo) {
-            partNo = linePart;
-            break;
+          if (partNo === qr.partNo) break;
+        }
+
+        // 最初の広域OCRと黒背景専用処理で一致しない場合だけ、補正した広域画像を試す。
+        if (partNo !== qr.partNo) {
+          const broadPart = await recognizeCodeWithFallback(worker, [
+            prepareContrastForOcr(partRegion, false, 1),
+            prepareContrastForOcr(partRegion, true, 1),
+            prepareBinaryForOcr(partRegion, false, 1.35),
+            prepareBinaryForOcr(partRegion, true, 1.35)
+          ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+          if (broadPart === qr.partNo || !partNo) partNo = broadPart;
+        }
+
+        // 段ボール地へ直接印刷された品番は、上側を横方向に重ねて分割し、
+        // 罫線や商品説明を避けながら最も濃い文字行だけを読む。
+        if (partNo !== qr.partNo && !darkPartPanels.length) {
+          const horizontalRegions = [
+            // 右寄せの品番枠を左右とも欠かさず含める。Image (10)では従来の
+            // 中央領域は末尾、右領域は先頭Qを切っていたため、この範囲を先に試す。
+            { canvas: cropCanvasFraction(partRegion, 0.40, 0, 0.60, 1), targetHeight: 200 },
+            { canvas: cropCanvasFraction(partRegion, 0, 0, 0.40, 1), targetHeight: 125 },
+            { canvas: cropCanvasFraction(partRegion, 0.22, 0, 0.60, 1), targetHeight: 125 },
+            { canvas: cropCanvasFraction(partRegion, 0.55, 0, 0.45, 1), targetHeight: 125 }
+          ];
+
+          for (const { canvas: region, targetHeight } of horizontalRegions) {
+            const textLine = cropDarkTextLineBounds(region);
+            if (!textLine) continue;
+            const textLineScale = ocrScaleForLine(textLine, targetHeight);
+            const lineVariants = [
+              padCanvas(prepareBinaryForOcr(textLine, false, textLineScale), 0.14, 255),
+              padCanvas(prepareContrastForOcr(textLine, false, textLineScale), 0.14, 255),
+              padCanvas(prepareBinaryForOcr(textLine, false, textLineScale, true), 0.14, 255)
+            ];
+            let linePart = await recognizeCodeWithFallback(
+              worker,
+              lineVariants,
+              "7",
+              "part",
+              qr.partNo,
+              "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            );
+            if (linePart !== qr.partNo) {
+              const wordPart = await recognizeCodeWithFallback(
+                worker,
+                lineVariants,
+                "8",
+                "part",
+                qr.partNo,
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+              );
+              if (wordPart === qr.partNo || !linePart) linePart = wordPart;
+            }
+            if (linePart !== qr.partNo) {
+              const segmentedPart = await recognizeSegmentedPartNumber(
+                worker,
+                lineVariants[0],
+                qr.partNo
+              );
+              if (segmentedPart === qr.partNo || !linePart) linePart = segmentedPart;
+            }
+            if (linePart === qr.partNo) {
+              partNo = linePart;
+              break;
+            }
+            if (!partNo && linePart) partNo = linePart;
           }
-          if (!partNo && linePart) partNo = linePart;
         }
-      }
 
-      // 上側切出しで見つからない場合のみ、従来どおり写真全体を1回確認する。
-      if (partNo !== qr.partNo && partRegion !== canvas) {
-        const wholeImagePart = await recognizeCodeWithFallback(worker, [
-          upscaleCanvas(canvas, 1)
-        ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-        if (wholeImagePart === qr.partNo || !partNo) partNo = wholeImagePart;
-      }
-
-      // Q/Oのような紛らわしい文字は、枠を除いた8文字で独立に再確認する。
-      // 期待値を認識条件に使わず、異なるサイズで同じ文字列を2回読めた場合だけ採用。
-      if (partNo !== qr.partNo) {
-        for (const { panel } of (darkPartPanels.length ? darkPartPanels : [{panel: partRegion}])) {
-          const isolatedPart = await recognizeIsolatedDarkPart(worker, panel);
-          if (isolatedPart) { partNo = isolatedPart; break; }
+        // 上側切出しで見つからない場合のみ、従来どおり写真全体を1回確認する。
+        if (partNo !== qr.partNo && partRegion !== canvas) {
+          const wholeImagePart = await recognizeCodeWithFallback(worker, [
+            upscaleCanvas(canvas, 1)
+          ], "11", "part", qr.partNo, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+          if (wholeImagePart === qr.partNo || !partNo) partNo = wholeImagePart;
         }
+
+        // Q/Oのような紛らわしい文字は、枠を除いた8文字で独立に再確認する。
+        // 期待値を認識条件に使わず、異なるサイズで同じ文字列を2回読めた場合だけ採用。
+        if (partNo !== qr.partNo) {
+          for (const { panel } of (darkPartPanels.length ? darkPartPanels : [{panel: partRegion}])) {
+            const isolatedPart = await recognizeIsolatedDarkPart(worker, panel);
+            if (isolatedPart) { partNo = isolatedPart; break; }
+          }
+        }
+
       }
 
       profileRecord("OCR：品番", partStartedAt);
